@@ -118,7 +118,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--time_gate_classes",
         type=str,
-        default="0,3,4",
+        default="0,3,4,5",
         help="Comma-separated class labels to apply time-gating to (e.g. '0,3,4').",
     )
     p.add_argument(
@@ -126,6 +126,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="Fallback class used when a prediction violates its class time window.",
+    )
+    p.add_argument(
+        "--time_gate_fallback_map",
+        type=str,
+        default="5:1",
+        help=(
+            "Optional per-class fallback overrides in the form 'pred:fb,pred:fb'. "
+            "Example: '5:1' means if we predicted class 5 outside its window, force it to class 1 instead of the default fallback."
+        ),
     )
     p.add_argument(
         "--disable_time_gating_eval",
@@ -174,6 +183,30 @@ def _parse_int_list(s: str) -> list[int]:
     return dedup
 
 
+def _parse_fallback_map(s: str) -> dict[int, int]:
+    """
+    Parse 'pred:fb,pred:fb' into {pred: fb}. Ignores malformed parts.
+    """
+    out: dict[int, int] = {}
+    txt = (s or "").strip()
+    if not txt:
+        return out
+    for part in txt.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        a, b = part.split(":", 1)
+        a = a.strip()
+        b = b.strip()
+        try:
+            pred = int(a)
+            fb = int(b)
+        except Exception:
+            continue
+        out[pred] = fb
+    return out
+
+
 def _compute_time_windows_by_class(df: pd.DataFrame, *, cfg, y: np.ndarray) -> dict[str, dict[str, str]]:
     """
     Compute per-class [min,max] timestamps from the cleaned training dataframe.
@@ -208,6 +241,7 @@ def _apply_time_gating(
     time_windows_by_class: dict[str, dict[str, str]],
     gate_classes: list[int],
     fallback_class: int,
+    fallback_map: dict[int, int] | None = None,
 ) -> tuple[np.ndarray, int]:
     """
     Apply time-window gating to a predicted label vector.
@@ -225,6 +259,7 @@ def _apply_time_gating(
     dt = pd.to_datetime(handle_time, errors="coerce")
     out = np.asarray(pred).copy().astype(int)
     changed = 0
+    fb_map = fallback_map or {}
 
     for cls in gate_classes:
         win = time_windows_by_class.get(str(int(cls)))
@@ -241,7 +276,8 @@ def _apply_time_gating(
         mask_time = dt.notna() & ((dt < mn) | (dt > mx))
         mask = mask_cls & mask_time.to_numpy()
         if mask.any():
-            out[mask] = int(fallback_class)
+            fb = int(fb_map.get(int(cls), fallback_class))
+            out[mask] = fb
             changed += int(mask.sum())
 
     return out, changed
@@ -378,6 +414,7 @@ def main() -> None:
     time_windows_by_class = _compute_time_windows_by_class(df, cfg=cfg, y=y)
     gate_classes = _parse_int_list(getattr(args, "time_gate_classes", "0,3,4"))
     fallback_class = int(getattr(args, "time_gate_fallback_class", 2))
+    fallback_map = _parse_fallback_map(getattr(args, "time_gate_fallback_map", ""))
 
     # Feature spec (single source of truth)
     spec = features.build_feature_spec(cfg)
@@ -452,18 +489,20 @@ def main() -> None:
             time_windows_by_class=time_windows_by_class,
             gate_classes=gate_classes,
             fallback_class=fallback_class,
+            fallback_map=fallback_map,
         )
         oof_macro_f1_gated = metrics_utils.evaluate(y, oof_gated, labels=labels)
         report_gated = classification_report(y, oof_gated, labels=labels, output_dict=True, zero_division=0)
         per_class_f1_gated = {str(k): float(v["f1-score"]) for k, v in report_gated.items() if str(k).isdigit()}
         print(
-            f"[train_linear_svc] OOF Macro F1 (time-gated classes={gate_classes} -> fallback={fallback_class}) = {oof_macro_f1_gated:.5f} "
+            f"[train_linear_svc] OOF Macro F1 (time-gated classes={gate_classes} -> fallback={fallback_class} map={fallback_map}) = {oof_macro_f1_gated:.5f} "
             f"(changed={n_changed})"
         )
         time_gating_eval = {
             "enabled": True,
             "gate_classes": gate_classes,
             "fallback_class": fallback_class,
+            "fallback_map": {str(k): int(v) for k, v in sorted(fallback_map.items())},
             "changed": int(n_changed),
             "oof_macro_f1": float(oof_macro_f1_gated),
             "per_class_f1": per_class_f1_gated,
@@ -577,6 +616,7 @@ def main() -> None:
         "time_gating_defaults": {
             "gate_classes": gate_classes,
             "fallback_class": fallback_class,
+            "fallback_map": {str(k): int(v) for k, v in sorted(fallback_map.items())},
         },
     }
     _json_dump(feature_spec_path, feature_spec)

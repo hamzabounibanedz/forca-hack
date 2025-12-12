@@ -1,0 +1,219 @@
+{
+  "run_id": "20251212_113111_utc",
+  "utc_time": "2025-12-12T11:31:35.665797+00:00",
+  "git_commit": "f13f5fa42b48feef43d965fd435f082f4dcf1cd1",
+  "env": {
+    "python": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "numpy": "2.3.5",
+    "pandas": "2.3.3",
+    "sklearn": "1.8.0"
+  },
+  "data": {
+    "train_path": "forca-hack\\outputs\\callcenter\\clean\\train_clean.csv",
+    "rows": 27258,
+    "labels": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "cv": {
+    "n_splits": 3,
+    "seed": 42,
+    "folds": [
+      {
+        "fold": 1,
+        "n_train": 18172,
+        "n_valid": 9086,
+        "macro_f1": 0.97994978973903
+      },
+      {
+        "fold": 2,
+        "n_train": 18172,
+        "n_valid": 9086,
+        "macro_f1": 0.9767883818205391
+      },
+      {
+        "fold": 3,
+        "n_train": 18172,
+        "n_valid": 9086,
+        "macro_f1": 0.985626821815987
+      }
+    ],
+    "oof_macro_f1": 0.9807363058735817,
+    "per_class_f1": {
+      "0": 0.9741060419235512,
+      "1": 0.9987484355444305,
+      "2": 0.9983554912722157,
+      "3": 0.9503030303030303,
+      "4": 0.9641532756489494,
+      "5": 0.9987515605493134
+    },
+    "classification_report": {
+      "0": {
+        "precision": 0.9610705596107056,
+        "recall": 0.9875,
+        "f1-score": 0.9741060419235512,
+        "support": 400.0
+      },
+      "1": {
+        "precision": 1.0,
+        "recall": 0.9975,
+        "f1-score": 0.9987484355444305,
+        "support": 400.0
+      },
+      "2": {
+        "precision": 0.9992464204973625,
+        "recall": 0.9974661493388234,
+        "f1-score": 0.9983554912722157,
+        "support": 25258.0
+      },
+      "3": {
+        "precision": 0.9223529411764706,
+        "recall": 0.98,
+        "f1-score": 0.9503030303030303,
+        "support": 400.0
+      },
+      "4": {
+        "precision": 0.9535452322738386,
+        "recall": 0.975,
+        "f1-score": 0.9641532756489494,
+        "support": 400.0
+      },
+      "5": {
+        "precision": 0.9975062344139651,
+        "recall": 1.0,
+        "f1-score": 0.9987515605493134,
+        "support": 400.0
+      },
+      "accuracy": 0.9967715899919289,
+      "macro avg": {
+        "precision": 0.9722868979953905,
+        "recall": 0.9895776915564706,
+        "f1-score": 0.9807363058735817,
+        "support": 27258.0
+      },
+      "weighted avg": {
+        "precision": 0.996872700708503,
+        "recall": 0.9967715899919289,
+        "f1-score": 0.9968041652410791,
+        "support": 27258.0
+      }
+    },
+    "postprocess": {
+      "time_gating": {
+        "enabled": true,
+        "gate_classes": [
+          0,
+          3,
+          4
+        ],
+        "fallback_class": 2,
+        "changed": 12,
+        "oof_macro_f1": 0.9831440323019289,
+        "per_class_f1": {
+          "0": 0.9753086419753086,
+          "1": 0.9987484355444305,
+          "2": 0.9985539686627182,
+          "3": 0.9549330085261876,
+          "4": 0.972568578553616,
+          "5": 0.9987515605493134
+        },
+        "classification_report": {
+          "0": {
+            "precision": 0.9634146341463414,
+            "recall": 0.9875,
+            "f1-score": 0.9753086419753086,
+            "support": 400.0
+          },
+          "1": {
+            "precision": 1.0,
+            "recall": 0.9975,
+            "f1-score": 0.9987484355444305,
+            "support": 400.0
+          },
+          "2": {
+            "precision": 0.999207135777998,
+            "recall": 0.9979016549212131,
+            "f1-score": 0.9985539686627182,
+            "support": 25258.0
+          },
+          "3": {
+            "precision": 0.9311163895486936,
+            "recall": 0.98,
+            "f1-score": 0.9549330085261876,
+            "support": 400.0
+          },
+          "4": {
+            "precision": 0.9701492537313433,
+            "recall": 0.975,
+            "f1-score": 0.972568578553616,
+            "support": 400.0
+          },
+          "5": {
+            "precision": 0.9975062344139651,
+            "recall": 1.0,
+            "f1-score": 0.9987515605493134,
+            "support": 400.0
+          },
+          "accuracy": 0.9971751412429378,
+          "macro avg": {
+            "precision": 0.9768989412697237,
+            "recall": 0.9896502758202023,
+            "f1-score": 0.9831440323019289,
+            "support": 27258.0
+          },
+          "weighted avg": {
+            "precision": 0.9972429540031114,
+            "recall": 0.9971751412429378,
+            "f1-score": 0.997197161587148,
+            "support": 27258.0
+          }
+        }
+      }
+    }
+  },
+  "model": {
+    "type": "LinearSVC",
+    "params": {
+      "C": 0.25,
+      "max_iter": 12000,
+      "class_weight": "balanced"
+    },
+    "vectorizers": {
+      "char": {
+        "analyzer": "char_wb",
+        "ngram_range": [
+          3,
+          8
+        ],
+        "min_df": 1,
+        "max_features": 250000
+      },
+      "word": {
+        "analyzer": "word",
+        "ngram_range": [
+          1,
+          2
+        ],
+        "min_df": 2,
+        "max_features": 120000
+      }
+    }
+  },
+  "artifacts": {
+    "model_path": "forca-hack\\outputs\\callcenter\\expB_charMinDf1\\model.joblib",
+    "metrics_path": "forca-hack\\outputs\\callcenter\\expB_charMinDf1\\metrics.json",
+    "feature_spec_path": "forca-hack\\outputs\\callcenter\\expB_charMinDf1\\feature_spec.json",
+    "fold_models": {
+      "enabled": false,
+      "n_models": 0,
+      "dir": null,
+      "manifest_path": null
+    }
+  }
+}

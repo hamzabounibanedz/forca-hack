@@ -83,6 +83,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Fallback class when a prediction violates its time window (overrides feature_spec defaults).",
     )
+    p.add_argument(
+        "--time_gate_fallback_map",
+        type=str,
+        default=None,
+        help=(
+            "Optional per-class fallback overrides in the form 'pred:fb,pred:fb'. "
+            "Example: '5:1' means if we predicted class 5 outside its window, force it to class 1 instead of the default fallback."
+        ),
+    )
     return p.parse_args()
 
 
@@ -105,6 +114,27 @@ def _parse_int_list(s: str) -> list[int]:
     return dedup
 
 
+def _parse_fallback_map(s: str | None) -> dict[int, int]:
+    out: dict[int, int] = {}
+    txt = (s or "").strip()
+    if not txt:
+        return out
+    for part in txt.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        a, b = part.split(":", 1)
+        a = a.strip()
+        b = b.strip()
+        try:
+            pred = int(a)
+            fb = int(b)
+        except Exception:
+            continue
+        out[pred] = fb
+    return out
+
+
 def _apply_time_gating(
     pred: np.ndarray,
     *,
@@ -112,6 +142,7 @@ def _apply_time_gating(
     time_windows_by_class: dict[str, Any],
     gate_classes: list[int],
     fallback_class: int,
+    fallback_map: dict[int, int] | None = None,
 ) -> tuple[np.ndarray, int]:
     """
     Apply time-window gating to predictions using train-derived windows.
@@ -127,6 +158,7 @@ def _apply_time_gating(
     dt = pd.to_datetime(handle_time, errors="coerce")
     out = np.asarray(pred).copy().astype(int)
     changed = 0
+    fb_map = fallback_map or {}
 
     for cls in gate_classes:
         win = time_windows_by_class.get(str(int(cls)))
@@ -143,7 +175,8 @@ def _apply_time_gating(
         mask_time = dt.notna() & ((dt < mn) | (dt > mx))
         mask = mask_cls & mask_time.to_numpy()
         if mask.any():
-            out[mask] = int(fallback_class)
+            fb = int(fb_map.get(int(cls), fallback_class))
+            out[mask] = fb
             changed += int(mask.sum())
 
     return out, changed
@@ -303,9 +336,11 @@ def main() -> None:
         if isinstance(defaults, dict):
             spec_gate_classes = defaults.get("gate_classes")
             spec_fallback = defaults.get("fallback_class")
+            spec_fallback_map = defaults.get("fallback_map")
         else:
             spec_gate_classes = None
             spec_fallback = None
+            spec_fallback_map = None
 
         if args.time_gate_classes:
             gate_classes = _parse_int_list(args.time_gate_classes)
@@ -321,16 +356,25 @@ def main() -> None:
         else:
             fallback_class = 2
 
+        if args.time_gate_fallback_map is not None:
+            fallback_map = _parse_fallback_map(args.time_gate_fallback_map)
+        elif isinstance(spec_fallback_map, dict) and spec_fallback_map:
+            # spec stores string keys
+            fallback_map = {int(k): int(v) for k, v in spec_fallback_map.items()}
+        else:
+            fallback_map = {}
+
         pred2, changed = _apply_time_gating(
             pred,
             handle_time=df_test[cfg.datetime_col],
             time_windows_by_class=time_windows,
             gate_classes=gate_classes,
             fallback_class=fallback_class,
+            fallback_map=fallback_map,
         )
         pred = pred2
         print(
-            f"[predict_linear_svc] Applied time gating: classes={gate_classes} -> fallback={fallback_class}  changed={changed}"
+            f"[predict_linear_svc] Applied time gating: classes={gate_classes} -> fallback={fallback_class} map={fallback_map}  changed={changed}"
         )
 
     # Build Kaggle submission by copying sample submission and replacing target
