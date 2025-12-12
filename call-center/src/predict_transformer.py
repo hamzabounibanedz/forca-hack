@@ -83,6 +83,23 @@ def _parse_fallback_map(s: str | None) -> dict[int, int]:
     return out
 
 
+def _parse_extra_text_cols(v: Any) -> list[str]:
+    """
+    `train_transformer.py` saves extra_text_cols as a JSON list.
+    Older/other scripts may pass a comma-separated string.
+    """
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple)):
+        out = [str(x).strip() for x in v]
+        return [x for x in out if x]
+    if isinstance(v, str):
+        return [c.strip() for c in v.split(",") if c.strip()]
+    # fallback
+    s = str(v).strip()
+    return [s] if s else []
+
+
 def _build_input_text(df: pd.DataFrame, *, text_col: str, extra_cols: list[str]) -> pd.Series:
     s = df[text_col].astype("string").fillna("")
     if not extra_cols:
@@ -214,7 +231,7 @@ def main() -> None:
     if cfg.id_col not in df_test.columns:
         raise ValueError(f"Missing id column '{cfg.id_col}' in cleaned test file.")
 
-    extra_cols = [c.strip() for c in str(spec.get("extra_text_cols") or "").split(",") if c.strip()]
+    extra_cols = _parse_extra_text_cols(spec.get("extra_text_cols"))
     texts = _build_input_text(df_test, text_col=cfg.text_col, extra_cols=extra_cols).astype(str).tolist()
 
     ds = TextDataset(texts, tokenizer, int(spec.get("max_length") or 128))
@@ -322,5 +339,6 @@ def main() -> None:
 if __name__ == "__main__":
     os.environ.setdefault("OMP_NUM_THREADS", "4")
     main()
+
 
 

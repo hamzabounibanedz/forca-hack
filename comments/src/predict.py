@@ -98,6 +98,7 @@ def _format_transformer_text(
     *,
     add_meta: bool,
     add_flags: bool,
+    allowed_special_tokens: set[str] | None = None,
 ) -> list[str]:
     """
     Must match the formatting used in `train_transformer.py`.
@@ -109,7 +110,8 @@ def _format_transformer_text(
 
     if add_meta:
         plat = df[cfg.platform_col].astype("string").fillna("unk").str.lower()
-        parts.append(("[PLATFORM] " + plat).astype("string"))
+        if allowed_special_tokens is None or "[PLATFORM]" in allowed_special_tokens:
+            parts.append(("[PLATFORM] " + plat).astype("string"))
 
     if add_flags:
         flag_specs: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -134,15 +136,25 @@ def _format_transformer_text(
             ("SPEED", re.compile(r"\b(?:mbps|gbps)\b|(?:ميغا|جيغا)", re.IGNORECASE)),
             ("WAIT", re.compile(r"\b(?:a\s*quand|quand|depuis|attend|attente)\b|(?:وقتاش|متي|مزال|مازال|نستناو|نستنو|انتظار|راني\s+في|راه|راهم)", re.IGNORECASE)),
             ("LOCATION", re.compile(r"\b(?:wilaya|commune|quartier|centre|ville|rue)\b|(?:ولاية|بلدية|حي|شارع|مدينة|الجزائر|وهران|عنابة|قسنطينة|سطيف|بجاية|الشلف|الجلفة)", re.IGNORECASE)),
+            ("MOBILE", re.compile(r"\b(?:3g|4g|5g)\b|(?:جيل\s*4|جيل\s*5)", re.IGNORECASE)),
+            ("TOWER", re.compile(r"\b(?:antenne|tour|pylone|emetteur|emet(?:teur|trice))\b|(?:برج|أبراج|ابراج)", re.IGNORECASE)),
+            ("PRAISE", re.compile(r"\b(?:bravo|merci|felicitations?|félicitations?)\b|(?:مبروك|بالتوفيق|👏|❤️)", re.IGNORECASE)),
+            ("LAUGH", re.compile(r"(?:هههه+|lol|mdr|😂|🤣)", re.IGNORECASE)),
         )
 
         flags_str = pd.Series([""] * len(df), index=df.index, dtype="string")
         for name, pat in flag_specs:
+            tok = f"[{name}]"
+            if allowed_special_tokens is not None and tok not in allowed_special_tokens:
+                continue
             col = txt.str.contains(pat, regex=True, na=False).map(lambda b, _n=name: f"[{_n}]" if b else "")
             flags_str = (flags_str + " " + col).astype("string")
         parts.append(flags_str.str.strip())
 
-    parts.append(("[TEXT] " + txt).astype("string"))
+    if allowed_special_tokens is None or "[TEXT]" in allowed_special_tokens:
+        parts.append(("[TEXT] " + txt).astype("string"))
+    else:
+        parts.append(txt.astype("string"))
 
     out = parts[0] if parts else pd.Series([""] * len(df), index=df.index, dtype="string")
     for p in parts[1:]:
@@ -300,7 +312,14 @@ def _predict_proba_transformer(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
-    texts = _format_transformer_text(df_test_clean, cfg, add_meta=add_meta, add_flags=add_flags)
+    allowed_special = set(getattr(tokenizer, "additional_special_tokens", []) or [])
+    texts = _format_transformer_text(
+        df_test_clean,
+        cfg,
+        add_meta=add_meta,
+        add_flags=add_flags,
+        allowed_special_tokens=allowed_special,
+    )
 
     n = len(texts)
     # Infer number of labels from model

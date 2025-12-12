@@ -64,6 +64,11 @@ _FLAG_SPECS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # Extra disambiguation for the hard cluster {2,4,6}:
     ("WAIT", re.compile(r"\b(?:a\s*quand|quand|depuis|attend|attente)\b|(?:وقتاش|متي|مزال|مازال|نستناو|نستنو|انتظار|راني\s+في|راه|راهم)", re.IGNORECASE)),
     ("LOCATION", re.compile(r"\b(?:wilaya|commune|quartier|centre|ville|rue)\b|(?:ولاية|بلدية|حي|شارع|مدينة|الجزائر|وهران|عنابة|قسنطينة|سطيف|بجاية|الشلف|الجلفة)", re.IGNORECASE)),
+    # Helps class 7 (mobile/couverture) and class 1 (praise)
+    ("MOBILE", re.compile(r"\b(?:3g|4g|5g)\b|(?:جيل\s*4|جيل\s*5)", re.IGNORECASE)),
+    ("TOWER", re.compile(r"\b(?:antenne|tour|pylone|emetteur|emet(?:teur|trice))\b|(?:برج|أبراج|ابراج)", re.IGNORECASE)),
+    ("PRAISE", re.compile(r"\b(?:bravo|merci|felicitations?|félicitations?)\b|(?:مبروك|بالتوفيق|👏|❤️)", re.IGNORECASE)),
+    ("LAUGH", re.compile(r"(?:هههه+|lol|mdr|😂|🤣)", re.IGNORECASE)),
 )
 
 
@@ -195,6 +200,9 @@ def train_transformer_cv(
     use_class_weights: bool,
     train_folds: list[int] | None = None,
     resume: bool = False,
+    pseudo_df_raw: pd.DataFrame | None = None,
+    pseudo_weight: float = 0.5,
+    pseudo_min_conf: float = 0.0,
 ) -> dict[str, Any]:
     """
     Stratified K-fold fine-tuning. Saves each fold checkpoint + metrics.
@@ -239,9 +247,17 @@ def train_transformer_cv(
 
     # --- Dataset wrapper ---
     class TextDataset(Dataset):
-        def __init__(self, _texts: list[str], _labels: np.ndarray | None, _tokenizer, _max_len: int):
+        def __init__(
+            self,
+            _texts: list[str],
+            _labels: np.ndarray | None,
+            _weights: np.ndarray | None,
+            _tokenizer,
+            _max_len: int,
+        ):
             self.texts = _texts
             self.labels = _labels
+            self.weights = _weights
             self.tok = _tokenizer
             self.max_len = _max_len
 
@@ -258,6 +274,8 @@ def train_transformer_cv(
             )
             if self.labels is not None:
                 item["labels"] = int(self.labels[idx])
+            if self.weights is not None:
+                item["sample_weight"] = float(self.weights[idx])
             return item
 
     # --- Metrics ---
@@ -271,30 +289,43 @@ def train_transformer_cv(
         f1 = macro_f1_score(labels, pred, labels=list(range(num_labels)))
         return {"macro_f1": f1}
 
-    # --- Optional weighted loss ---
-    class WeightedTrainer(Trainer):
-        def __init__(self, *args, class_weights=None, **kwargs):
+    # --- Custom loss: supports label smoothing + optional class weights + optional per-sample weights ---
+    class CustomTrainer(Trainer):
+        def __init__(self, *args, class_weights=None, label_smoothing_factor: float = 0.0, **kwargs):
             super().__init__(*args, **kwargs)
             self.class_weights = class_weights
+            self.label_smoothing_factor = float(label_smoothing_factor or 0.0)
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             """
             Compatible with newer Transformers Trainer which may pass extra kwargs
             like `num_items_in_batch`.
             """
-            labels = inputs.get("labels")
+            import torch.nn.functional as F
+
+            labels = inputs.pop("labels", None)
+            sample_weight = inputs.pop("sample_weight", None)
             if labels is None:
                 return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
 
-            outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
+            outputs = model(**inputs)
             logits = outputs.logits
 
-            if self.class_weights is None:
-                loss_fct = torch.nn.CrossEntropyLoss()
-            else:
-                loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights.to(logits.device))
+            loss = F.cross_entropy(
+                logits,
+                labels,
+                weight=(self.class_weights.to(logits.device) if self.class_weights is not None else None),
+                reduction="none",
+                label_smoothing=float(self.label_smoothing_factor),
+            )
 
-            loss = loss_fct(logits, labels)
+            if sample_weight is not None:
+                sw = sample_weight.to(loss.device).float()
+                if sw.ndim > 1:
+                    sw = sw.view(-1)
+                loss = loss * sw
+
+            loss = loss.mean()
             return (loss, outputs) if return_outputs else loss
 
     # --- CV loop ---
@@ -346,6 +377,31 @@ def train_transformer_cv(
         w = w / w.mean()
         class_weights = torch.tensor(w, dtype=torch.float32)
 
+    # ---- Optional pseudo-labeled data (added only to training splits) ----
+    pseudo_texts: list[str] = []
+    pseudo_y: np.ndarray | None = None
+    pseudo_w: np.ndarray | None = None
+    pseudo_stats: dict[str, Any] = {}
+    if pseudo_df_raw is not None and len(pseudo_df_raw) > 0:
+        df_p = schema.rename_raw_columns(pseudo_df_raw, cfg, is_train=True)
+        if "confidence" in df_p.columns and float(pseudo_min_conf) > 0:
+            conf = pd.to_numeric(df_p["confidence"], errors="coerce").fillna(0.0)
+            df_p = df_p[conf >= float(pseudo_min_conf)].copy()
+
+        df_p_clean = preprocess.preprocess_comments_df(df_p, cfg, is_train=True)
+        y_p_raw = df_p_clean[cfg.target_col].astype(int).to_numpy()
+        y_p = [label2id[int(v)] for v in y_p_raw.tolist() if int(v) in label2id]
+        if y_p:
+            pseudo_y = np.asarray(y_p, dtype=np.int64)
+            pseudo_texts = _format_text(df_p_clean, cfg, add_meta=add_meta, add_flags=add_flags)
+            pseudo_w = np.full((len(pseudo_texts),), float(max(0.0, pseudo_weight)), dtype=np.float32)
+            pseudo_stats = {
+                "rows_raw": int(len(pseudo_df_raw)),
+                "rows_used": int(len(pseudo_texts)),
+                "pseudo_weight": float(pseudo_weight),
+                "pseudo_min_conf": float(pseudo_min_conf),
+            }
+
     folds_set = set(int(x) for x in train_folds) if train_folds else None
 
     def _has_saved_weights(p: Path) -> bool:
@@ -362,8 +418,15 @@ def train_transformer_cv(
         y_tr = y[tr_idx]
         y_va = y[va_idx]
 
-        ds_tr = TextDataset(train_texts, y_tr, tokenizer, max_length)
-        ds_va = TextDataset(val_texts, y_va, tokenizer, max_length)
+        # Optional sample weights: labeled train = 1.0; pseudo = pseudo_weight
+        w_tr = np.ones((len(train_texts),), dtype=np.float32)
+        if pseudo_y is not None and pseudo_w is not None and len(pseudo_texts) == len(pseudo_y):
+            train_texts = train_texts + pseudo_texts
+            y_tr = np.concatenate([y_tr, pseudo_y], axis=0)
+            w_tr = np.concatenate([w_tr, pseudo_w], axis=0)
+
+        ds_tr = TextDataset(train_texts, y_tr, w_tr, tokenizer, max_length)
+        ds_va = TextDataset(val_texts, y_va, None, tokenizer, max_length)
 
         # Resume mode: only skip when the fold directory has BOTH config and weights.
         # (If training was interrupted, config.json may exist but weights may be missing.)
@@ -421,7 +484,7 @@ def train_transformer_cv(
         if early_stopping_patience > 0:
             callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
 
-        trainer_cls = WeightedTrainer if use_class_weights else Trainer
+        trainer_cls = CustomTrainer
         trainer_kwargs: dict[str, Any] = dict(
             model=model,
             args=training_args,
@@ -431,8 +494,8 @@ def train_transformer_cv(
             compute_metrics=compute_metrics,
             callbacks=callbacks,
         )
-        if use_class_weights:
-            trainer_kwargs["class_weights"] = class_weights
+        trainer_kwargs["class_weights"] = class_weights
+        trainer_kwargs["label_smoothing_factor"] = float(label_smoothing_factor)
 
         trainer = trainer_cls(**trainer_kwargs)
 
@@ -467,6 +530,7 @@ def train_transformer_cv(
         "add_flags": add_flags,
         "early_stopping_patience": early_stopping_patience,
         "use_class_weights": use_class_weights,
+        "pseudo": pseudo_stats,
         "fold_scores": fold_scores,
         "macro_f1_mean": mean_f1,
         "macro_f1_std": std_f1,
@@ -502,6 +566,9 @@ def main() -> None:
     parser.add_argument("--early_stopping_patience", type=int, default=2)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--use_class_weights", action="store_true")
+    parser.add_argument("--pseudo_csv", type=str, default=None, help="Optional pseudo-labeled CSV to add to training.")
+    parser.add_argument("--pseudo_weight", type=float, default=0.5, help="Per-sample weight for pseudo-labeled rows (0.2-0.7).")
+    parser.add_argument("--pseudo_min_conf", type=float, default=0.0, help="If pseudo CSV has 'confidence', keep only >= this value.")
     parser.add_argument("--run_dir", type=str, default=None, help="Use an existing run dir (resume-friendly).")
     parser.add_argument("--train_folds", type=int, nargs="*", default=None, help="Train only these fold numbers (1..K).")
     parser.add_argument("--resume", action="store_true", help="Skip already-trained folds found in run_dir.")
@@ -522,6 +589,11 @@ def main() -> None:
     train_path = data_dir / args.train_filename
     schema.validate_file_exists(train_path)
     df_train_raw = schema.read_csv_robust(train_path)
+    pseudo_df_raw = None
+    if args.pseudo_csv:
+        p = Path(args.pseudo_csv)
+        schema.validate_file_exists(p)
+        pseudo_df_raw = schema.read_csv_robust(p)
 
     # Resolve output dir
     if args.output_dir:
@@ -565,6 +637,9 @@ def main() -> None:
         use_class_weights=bool(args.use_class_weights),
         train_folds=args.train_folds,
         resume=resume,
+        pseudo_df_raw=pseudo_df_raw,
+        pseudo_weight=float(args.pseudo_weight),
+        pseudo_min_conf=float(args.pseudo_min_conf),
     )
 
     (run_dir / "run_summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

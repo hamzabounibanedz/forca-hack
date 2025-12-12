@@ -1,0 +1,52 @@
+{
+  "task": "comments_tfidf_lr",
+  "timestamp_utc": "2025-12-12T20:17:59.032248+00:00",
+  "train_path": "forca-hack\\comments\\data\\train.csv",
+  "output_dir": "forca-hack\\outputs\\comments\\models\\tfidf_lr_test",
+  "cv": {
+    "label2id": {
+      "1": 0,
+      "2": 1,
+      "3": 2,
+      "4": 3,
+      "5": 4,
+      "6": 5,
+      "7": 6,
+      "8": 7,
+      "9": 8
+    },
+    "id2label": {
+      "0": 1,
+      "1": 2,
+      "2": 3,
+      "3": 4,
+      "4": 5,
+      "5": 6,
+      "6": 7,
+      "7": 8,
+      "8": 9
+    },
+    "fold_scores": [
+      0.632067864588779,
+      0.6395929509105985,
+      0.6251917111882167,
+      0.613398409868998,
+      0.6499677796196833
+    ],
+    "macro_f1_mean": 0.6320437432352551,
+    "macro_f1_std": 0.012432706850786518,
+    "n_splits": 5,
+    "seed": 42,
+    "params": {
+      "word_max_features": 50000,
+      "char_max_features": 150000,
+      "C": 6.0
+    }
+  },
+  "artifacts": {
+    "model": "forca-hack\\outputs\\comments\\models\\tfidf_lr_test\\model.joblib",
+    "oof_proba": "forca-hack\\outputs\\comments\\models\\tfidf_lr_test\\oof_proba.npy",
+    "label_mapping": "forca-hack\\outputs\\comments\\models\\tfidf_lr_test\\label_mapping.json",
+    "preprocess_config": "forca-hack\\outputs\\comments\\models\\tfidf_lr_test\\preprocess_config.json"
+  }
+}

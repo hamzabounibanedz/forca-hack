@@ -114,6 +114,22 @@ def _parse_path_list(s: str | None) -> list[Path]:
     return dedup
 
 
+def _parse_extra_text_cols(v: Any) -> list[str]:
+    """
+    `train_transformer.py` saves extra_text_cols as a JSON list.
+    Older/other scripts may pass a comma-separated string.
+    """
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple)):
+        out = [str(x).strip() for x in v]
+        return [x for x in out if x]
+    if isinstance(v, str):
+        return [c.strip() for c in v.split(",") if c.strip()]
+    s = str(v).strip()
+    return [s] if s else []
+
+
 def _softmax(x: np.ndarray) -> np.ndarray:
     # stable softmax over last axis
     x = x.astype("float64", copy=False)
@@ -277,7 +293,7 @@ def _transformer_logits(
         labels = list(range(int(model.config.num_labels)))
     labels = [int(x) for x in labels]
 
-    extra_cols = [c.strip() for c in str(spec.get("extra_text_cols") or "").split(",") if c.strip()]
+    extra_cols = _parse_extra_text_cols(spec.get("extra_text_cols"))
     max_length = int(spec.get("max_length") or 128)
 
     texts = _build_transformer_text(df_test, text_col=cfg.text_col, extra_cols=extra_cols)
@@ -507,5 +523,6 @@ def main() -> None:
 if __name__ == "__main__":
     os.environ.setdefault("OMP_NUM_THREADS", "4")
     main()
+
 
 
