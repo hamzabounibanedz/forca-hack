@@ -108,6 +108,31 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--C", type=float, default=0.25)
     p.add_argument("--max_iter", type=int, default=12000)
 
+    # ----- Optional deterministic post-processing (time-window gating) -----
+    # Learns per-class [min(handle_time), max(handle_time)] from TRAIN only.
+    # At inference, if a prediction for some class is outside its observed window,
+    # force it to a fallback class (default=2).
+    #
+    # This is OFF by default at inference; here we only *evaluate* it on OOF so you can see
+    # whether it helps and save the needed metadata in artifacts.
+    p.add_argument(
+        "--time_gate_classes",
+        type=str,
+        default="0,3,4",
+        help="Comma-separated class labels to apply time-gating to (e.g. '0,3,4').",
+    )
+    p.add_argument(
+        "--time_gate_fallback_class",
+        type=int,
+        default=2,
+        help="Fallback class used when a prediction violates its class time window.",
+    )
+    p.add_argument(
+        "--disable_time_gating_eval",
+        action="store_true",
+        help="If set, do not compute/print the time-gated OOF Macro-F1 (still saves time windows in feature_spec).",
+    )
+
     # Optional: save fold models for ensembling at inference time
     p.add_argument(
         "--save_fold_models",
@@ -128,6 +153,98 @@ def parse_args() -> argparse.Namespace:
     )
 
     return p.parse_args()
+
+
+def _parse_int_list(s: str) -> list[int]:
+    parts = [p.strip() for p in str(s).split(",") if p.strip()]
+    out: list[int] = []
+    for p in parts:
+        try:
+            out.append(int(p))
+        except Exception:
+            continue
+    # de-dup while preserving order
+    seen = set()
+    dedup: list[int] = []
+    for v in out:
+        if v in seen:
+            continue
+        seen.add(v)
+        dedup.append(v)
+    return dedup
+
+
+def _compute_time_windows_by_class(df: pd.DataFrame, *, cfg, y: np.ndarray) -> dict[str, dict[str, str]]:
+    """
+    Compute per-class [min,max] timestamps from the cleaned training dataframe.
+
+    Returns a JSON-friendly dict:
+      {"0": {"min": "...", "max": "..."}, ...}
+    """
+    if cfg.datetime_col not in df.columns:
+        return {}
+    dt = pd.to_datetime(df[cfg.datetime_col], errors="coerce")
+    if dt.isna().all():
+        return {}
+
+    out: dict[str, dict[str, str]] = {}
+    for cls in sorted(np.unique(y).tolist()):
+        mask = y == int(cls)
+        if not mask.any():
+            continue
+        s = dt.loc[mask]
+        mn = s.min()
+        mx = s.max()
+        if pd.isna(mn) or pd.isna(mx):
+            continue
+        out[str(int(cls))] = {"min": mn.isoformat(), "max": mx.isoformat()}
+    return out
+
+
+def _apply_time_gating(
+    pred: np.ndarray,
+    *,
+    handle_time: pd.Series,
+    time_windows_by_class: dict[str, dict[str, str]],
+    gate_classes: list[int],
+    fallback_class: int,
+) -> tuple[np.ndarray, int]:
+    """
+    Apply time-window gating to a predicted label vector.
+
+    If pred[i] in gate_classes AND handle_time[i] is outside the train-observed window for that class,
+    then pred[i] -> fallback_class.
+
+    Returns (pred_gated, n_changed).
+    """
+    if not len(pred):
+        return pred, 0
+    if not time_windows_by_class:
+        return pred, 0
+
+    dt = pd.to_datetime(handle_time, errors="coerce")
+    out = np.asarray(pred).copy().astype(int)
+    changed = 0
+
+    for cls in gate_classes:
+        win = time_windows_by_class.get(str(int(cls)))
+        if not win:
+            continue
+        mn = pd.to_datetime(win.get("min"), errors="coerce")
+        mx = pd.to_datetime(win.get("max"), errors="coerce")
+        if pd.isna(mn) or pd.isna(mx):
+            continue
+
+        mask_cls = out == int(cls)
+        if not mask_cls.any():
+            continue
+        mask_time = dt.notna() & ((dt < mn) | (dt > mx))
+        mask = mask_cls & mask_time.to_numpy()
+        if mask.any():
+            out[mask] = int(fallback_class)
+            changed += int(mask.sum())
+
+    return out, changed
 
 
 def _prepare_frame(
@@ -249,9 +366,18 @@ def main() -> None:
     if cfg.id_col in df.columns:
         df = df.sort_values(cfg.id_col, kind="mergesort").reset_index(drop=True)
 
+    # Parse handle_time once (used by feature engineering and optional time-gating metadata)
+    if cfg.datetime_col in df.columns:
+        df[cfg.datetime_col] = pd.to_datetime(df[cfg.datetime_col], errors="coerce")
+
     y = pd.to_numeric(df[cfg.target_col], errors="raise").astype(int).to_numpy()
     labels = sorted(np.unique(y).tolist())
     print(f"[train_linear_svc] rows={len(df)}  classes={labels}  n_classes={len(labels)}")
+
+    # Train-only metadata for optional inference postprocessing
+    time_windows_by_class = _compute_time_windows_by_class(df, cfg=cfg, y=y)
+    gate_classes = _parse_int_list(getattr(args, "time_gate_classes", "0,3,4"))
+    fallback_class = int(getattr(args, "time_gate_fallback_class", 2))
 
     # Feature spec (single source of truth)
     spec = features.build_feature_spec(cfg)
@@ -313,6 +439,37 @@ def main() -> None:
     per_class_f1 = {str(k): float(v["f1-score"]) for k, v in report.items() if str(k).isdigit()}
     print(f"[train_linear_svc] OOF Macro F1 = {oof_macro_f1:.5f}")
 
+    # Optional deterministic postprocess evaluation (does NOT change the trained model)
+    time_gating_eval: dict[str, Any] | None = None
+    if (
+        not bool(getattr(args, "disable_time_gating_eval", False))
+        and time_windows_by_class
+        and (cfg.datetime_col in df.columns)
+    ):
+        oof_gated, n_changed = _apply_time_gating(
+            oof_pred,
+            handle_time=df[cfg.datetime_col],
+            time_windows_by_class=time_windows_by_class,
+            gate_classes=gate_classes,
+            fallback_class=fallback_class,
+        )
+        oof_macro_f1_gated = metrics_utils.evaluate(y, oof_gated, labels=labels)
+        report_gated = classification_report(y, oof_gated, labels=labels, output_dict=True, zero_division=0)
+        per_class_f1_gated = {str(k): float(v["f1-score"]) for k, v in report_gated.items() if str(k).isdigit()}
+        print(
+            f"[train_linear_svc] OOF Macro F1 (time-gated classes={gate_classes} -> fallback={fallback_class}) = {oof_macro_f1_gated:.5f} "
+            f"(changed={n_changed})"
+        )
+        time_gating_eval = {
+            "enabled": True,
+            "gate_classes": gate_classes,
+            "fallback_class": fallback_class,
+            "changed": int(n_changed),
+            "oof_macro_f1": float(oof_macro_f1_gated),
+            "per_class_f1": per_class_f1_gated,
+            "classification_report": report_gated,
+        }
+
     # Save fold ensemble manifest if requested
     if fold_model_paths:
         fold_manifest_path = artifacts_dir / "fold_models.json"
@@ -362,6 +519,9 @@ def main() -> None:
             "oof_macro_f1": float(oof_macro_f1),
             "per_class_f1": per_class_f1,
             "classification_report": report,
+            "postprocess": {
+                "time_gating": time_gating_eval,
+            },
         },
         "model": {
             "type": "LinearSVC",
@@ -412,6 +572,12 @@ def main() -> None:
             "char_vectorizer": metrics["model"]["vectorizers"]["char"],
             "word_vectorizer": metrics["model"]["vectorizers"]["word"],
         },
+        # Train-only metadata for deterministic inference postprocessing
+        "time_windows_by_class": time_windows_by_class,
+        "time_gating_defaults": {
+            "gate_classes": gate_classes,
+            "fallback_class": fallback_class,
+        },
     }
     _json_dump(feature_spec_path, feature_spec)
 
@@ -425,4 +591,5 @@ if __name__ == "__main__":
     # Avoid extremely noisy thread usage in some Colab configs (optional)
     os.environ.setdefault("OMP_NUM_THREADS", "4")
     main()
+
 

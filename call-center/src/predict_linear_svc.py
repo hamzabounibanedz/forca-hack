@@ -64,7 +64,89 @@ def parse_args() -> argparse.Namespace:
         default="fold_models",
         help="Subfolder name under artifacts_dir used to store fold models.",
     )
+
+    # Optional deterministic post-processing (time-window gating)
+    p.add_argument(
+        "--time_gate",
+        action="store_true",
+        help="If set, apply time-window gating using train-derived windows stored in feature_spec.json.",
+    )
+    p.add_argument(
+        "--time_gate_classes",
+        type=str,
+        default=None,
+        help="Comma-separated class labels to gate (overrides feature_spec defaults). Example: '0,3,4'.",
+    )
+    p.add_argument(
+        "--time_gate_fallback_class",
+        type=int,
+        default=None,
+        help="Fallback class when a prediction violates its time window (overrides feature_spec defaults).",
+    )
     return p.parse_args()
+
+
+def _parse_int_list(s: str) -> list[int]:
+    parts = [p.strip() for p in str(s).split(",") if p.strip()]
+    out: list[int] = []
+    for p in parts:
+        try:
+            out.append(int(p))
+        except Exception:
+            continue
+    # de-dup while preserving order
+    seen = set()
+    dedup: list[int] = []
+    for v in out:
+        if v in seen:
+            continue
+        seen.add(v)
+        dedup.append(v)
+    return dedup
+
+
+def _apply_time_gating(
+    pred: np.ndarray,
+    *,
+    handle_time: pd.Series,
+    time_windows_by_class: dict[str, Any],
+    gate_classes: list[int],
+    fallback_class: int,
+) -> tuple[np.ndarray, int]:
+    """
+    Apply time-window gating to predictions using train-derived windows.
+
+    If pred[i] in gate_classes AND handle_time[i] is outside that class window,
+    pred[i] -> fallback_class.
+
+    Returns (pred_gated, n_changed).
+    """
+    if not len(pred) or not time_windows_by_class or not gate_classes:
+        return pred, 0
+
+    dt = pd.to_datetime(handle_time, errors="coerce")
+    out = np.asarray(pred).copy().astype(int)
+    changed = 0
+
+    for cls in gate_classes:
+        win = time_windows_by_class.get(str(int(cls)))
+        if not isinstance(win, dict):
+            continue
+        mn = pd.to_datetime(win.get("min"), errors="coerce")
+        mx = pd.to_datetime(win.get("max"), errors="coerce")
+        if pd.isna(mn) or pd.isna(mx):
+            continue
+
+        mask_cls = out == int(cls)
+        if not mask_cls.any():
+            continue
+        mask_time = dt.notna() & ((dt < mn) | (dt > mx))
+        mask = mask_cls & mask_time.to_numpy()
+        if mask.any():
+            out[mask] = int(fallback_class)
+            changed += int(mask.sum())
+
+    return out, changed
 
 
 def _prepare_frame(df: pd.DataFrame, cfg, spec: dict[str, Any]) -> pd.DataFrame:
@@ -202,6 +284,55 @@ def main() -> None:
         pred = model.predict(X)
         pred = np.asarray(pred).reshape(-1).astype(int)
 
+    # Optional deterministic time gating (uses train-derived windows saved in feature_spec.json)
+    if bool(getattr(args, "time_gate", False)):
+        if cfg.datetime_col not in df_test.columns:
+            raise ValueError(
+                f"--time_gate requires '{cfg.datetime_col}' column in cleaned test file; missing in: {test_path}"
+            )
+
+        time_windows = feature_spec.get("time_windows_by_class")
+        if not isinstance(time_windows, dict) or not time_windows:
+            raise ValueError(
+                "--time_gate requires 'time_windows_by_class' in feature_spec.json. "
+                "Tip: retrain using the updated train_linear_svc.py that saves time windows."
+            )
+
+        # Resolve gating config (CLI overrides feature_spec defaults)
+        defaults = feature_spec.get("time_gating_defaults") if isinstance(feature_spec, dict) else None
+        if isinstance(defaults, dict):
+            spec_gate_classes = defaults.get("gate_classes")
+            spec_fallback = defaults.get("fallback_class")
+        else:
+            spec_gate_classes = None
+            spec_fallback = None
+
+        if args.time_gate_classes:
+            gate_classes = _parse_int_list(args.time_gate_classes)
+        elif isinstance(spec_gate_classes, list) and spec_gate_classes:
+            gate_classes = [int(x) for x in spec_gate_classes]
+        else:
+            gate_classes = [0, 3, 4]
+
+        if args.time_gate_fallback_class is not None:
+            fallback_class = int(args.time_gate_fallback_class)
+        elif spec_fallback is not None:
+            fallback_class = int(spec_fallback)
+        else:
+            fallback_class = 2
+
+        pred2, changed = _apply_time_gating(
+            pred,
+            handle_time=df_test[cfg.datetime_col],
+            time_windows_by_class=time_windows,
+            gate_classes=gate_classes,
+            fallback_class=fallback_class,
+        )
+        pred = pred2
+        print(
+            f"[predict_linear_svc] Applied time gating: classes={gate_classes} -> fallback={fallback_class}  changed={changed}"
+        )
+
     # Build Kaggle submission by copying sample submission and replacing target
     df_sub = pd.read_csv(sample_path)
     expected_cols = [cfg.id_col_raw, cfg.target_col_raw]
@@ -235,4 +366,5 @@ def main() -> None:
 if __name__ == "__main__":
     os.environ.setdefault("OMP_NUM_THREADS", "4")
     main()
+
 
