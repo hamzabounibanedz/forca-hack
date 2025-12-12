@@ -45,6 +45,11 @@ TEXT_NUM_FEATURES_BASE: tuple[str, ...] = (
     "digit_count",
     "has_num_token",
     "has_phone_token",
+    # Speed/value patterns (help separate class 4)
+    "mbps_value_count",
+    "mbps_value_max",
+    "mo_value_count",
+    "mo_value_max",
 )
 
 # Task D: explicitly model subs_level missingness (UNK after preprocessing)
@@ -54,6 +59,25 @@ SUBS_LEVEL_FEATURES: tuple[str, ...] = ("subs_level_missing",)
 KEYWORD_SPECS: tuple[tuple[str, str], ...] = (
     ("has_pon", r"\bpon\b"),
     ("has_los", r"\blos\b"),
+    # --- Class 3 bottleneck helpers (fiber signal) ---
+    # NOTE: these are evaluated on the *cleaned* text (lower + accents removed).
+    ("has_los_rouge", r"\blos\s+rouge\b"),
+    ("has_los_allume", r"\blos\s+allum\w*\b"),
+    ("has_los_eteint", r"\blos\s+eteint\w*\b"),
+    ("has_pon_stable", r"\bpon\s+stable\b"),
+    ("has_pon_instable", r"\bpon\s+instable\b"),
+    ("has_pon_clignote", r"\bpon\s+clignot\w*\b"),
+    ("has_signal_bad", r"(?:\blos\s+(?:rouge|allum\w*)\b)|(?:\bpon\s+(?:clignot\w*|instable|rouge)\b)"),
+
+    # --- Class 4 bottleneck helpers (throughput / speed issues) ---
+    ("has_debit", r"\bdebit\b"),
+    ("has_chute_debit", r"\bchute\s+de\s+debit\b"),
+    ("has_mbps", r"\bmbps\b"),
+    ("has_download", r"\bdownload\b"),
+    ("has_upload", r"\bupload\b"),
+    ("has_imei", r"\bimei\b"),
+    ("has_gps", r"\bgps\b"),
+
     ("has_adsl", r"\badsl\b"),
     ("has_ftth", r"\bftth\b"),
     ("has_fttx", r"\bfttx\b"),
@@ -131,6 +155,32 @@ def add_text_helper_features(
 
     for feat_name, pattern in keyword_specs:
         out[feat_name] = s.str.contains(pattern, regex=True, case=False, na=False).astype("float32")
+
+    # --- Numeric speed extractions (class 4 helpers) ---
+    # These are cheap signals that complement TF-IDF / CatBoost text features.
+    # We default missing to 0 (not -1) because "no speed value mentioned" is a meaningful state.
+    mbps = s.str.extractall(r"\b(\d+(?:[.,]\d+)?)\s*mbps\b")
+    if len(mbps.index):
+        mbps_s = mbps[0].astype("string").str.replace(",", ".", regex=False)
+        mbps_val = pd.to_numeric(mbps_s, errors="coerce")
+        mbps_max = mbps_val.groupby(level=0).max()
+        mbps_cnt = mbps_val.groupby(level=0).size()
+    else:
+        mbps_max = pd.Series(dtype="float64")
+        mbps_cnt = pd.Series(dtype="int64")
+    out["mbps_value_count"] = mbps_cnt.reindex(out.index, fill_value=0).astype("float32")
+    out["mbps_value_max"] = mbps_max.reindex(out.index).fillna(0.0).astype("float32")
+
+    mo = s.str.extractall(r"\b(\d{1,4})\s*mo\b")
+    if len(mo.index):
+        mo_val = pd.to_numeric(mo[0], errors="coerce")
+        mo_max = mo_val.groupby(level=0).max()
+        mo_cnt = mo_val.groupby(level=0).size()
+    else:
+        mo_max = pd.Series(dtype="float64")
+        mo_cnt = pd.Series(dtype="int64")
+    out["mo_value_count"] = mo_cnt.reindex(out.index, fill_value=0).astype("float32")
+    out["mo_value_max"] = mo_max.reindex(out.index).fillna(0.0).astype("float32")
 
     return out
 

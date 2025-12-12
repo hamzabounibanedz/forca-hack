@@ -1,0 +1,134 @@
+{
+  "run_id": "20251212_080438_utc",
+  "utc_time": "2025-12-12T08:05:11.800837+00:00",
+  "git_commit": "547b4830be88df71312f5b8aa155951c2b6a416d",
+  "data": {
+    "train_path": "c:\\Users\\User\\Desktop\\AI\\forca-hack\\outputs\\callcenter\\clean\\train_clean.csv",
+    "rows": 27258,
+    "labels": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "cv": {
+    "n_splits": 3,
+    "seed": 42,
+    "folds": [
+      {
+        "fold": 1,
+        "n_train": 18172,
+        "n_valid": 9086,
+        "macro_f1": 0.9798944277200157
+      },
+      {
+        "fold": 2,
+        "n_train": 18172,
+        "n_valid": 9086,
+        "macro_f1": 0.9767347484425591
+      },
+      {
+        "fold": 3,
+        "n_train": 18172,
+        "n_valid": 9086,
+        "macro_f1": 0.985613019537524
+      }
+    ],
+    "oof_macro_f1": 0.98069774187937,
+    "per_class_f1": {
+      "0": 0.9716399506781751,
+      "1": 0.9987484355444305,
+      "2": 0.9983556867484201,
+      "3": 0.9490291262135923,
+      "4": 0.9676616915422885,
+      "5": 0.9987515605493134
+    },
+    "classification_report": {
+      "0": {
+        "precision": 0.9586374695863747,
+        "recall": 0.985,
+        "f1-score": 0.9716399506781751,
+        "support": 400.0
+      },
+      "1": {
+        "precision": 1.0,
+        "recall": 0.9975,
+        "f1-score": 0.9987484355444305,
+        "support": 400.0
+      },
+      "2": {
+        "precision": 0.9991276418573298,
+        "recall": 0.997584923588566,
+        "f1-score": 0.9983556867484201,
+        "support": 25258.0
+      },
+      "3": {
+        "precision": 0.9221698113207547,
+        "recall": 0.9775,
+        "f1-score": 0.9490291262135923,
+        "support": 400.0
+      },
+      "4": {
+        "precision": 0.9628712871287128,
+        "recall": 0.9725,
+        "f1-score": 0.9676616915422885,
+        "support": 400.0
+      },
+      "5": {
+        "precision": 0.9975062344139651,
+        "recall": 1.0,
+        "f1-score": 0.9987515605493134,
+        "support": 400.0
+      },
+      "accuracy": 0.9967715899919289,
+      "macro avg": {
+        "precision": 0.9733854073845228,
+        "recall": 0.988347487264761,
+        "f1-score": 0.98069774187937,
+        "support": 27258.0
+      },
+      "weighted avg": {
+        "precision": 0.9968611012918174,
+        "recall": 0.9967715899919289,
+        "f1-score": 0.9968009480410418,
+        "support": 27258.0
+      }
+    }
+  },
+  "model": {
+    "type": "LinearSVC",
+    "params": {
+      "C": 0.25,
+      "max_iter": 6000,
+      "class_weight": "balanced"
+    },
+    "vectorizers": {
+      "char": {
+        "analyzer": "char_wb",
+        "ngram_range": [
+          2,
+          6
+        ],
+        "min_df": 2,
+        "max_features": 150000
+      },
+      "word": {
+        "analyzer": "word",
+        "ngram_range": [
+          1,
+          2
+        ],
+        "min_df": 2,
+        "max_features": 80000
+      }
+    }
+  },
+  "artifacts": {
+    "model_path": "c:\\Users\\User\\Desktop\\AI\\forca-hack\\outputs\\callcenter\\linear_svc_local\\model.joblib",
+    "metrics_path": "c:\\Users\\User\\Desktop\\AI\\forca-hack\\outputs\\callcenter\\linear_svc_local\\metrics.json",
+    "feature_spec_path": "c:\\Users\\User\\Desktop\\AI\\forca-hack\\outputs\\callcenter\\linear_svc_local\\feature_spec.json"
+  }
+}
