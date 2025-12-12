@@ -24,7 +24,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import subprocess
+import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +34,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import sklearn
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import classification_report
@@ -168,7 +171,13 @@ def _build_pipeline(
         remainder="drop",
     )
 
-    clf = LinearSVC(class_weight="balanced", C=float(args.C), max_iter=int(args.max_iter))
+    # IMPORTANT: set random_state for deterministic liblinear shuffling.
+    clf = LinearSVC(
+        class_weight="balanced",
+        C=float(args.C),
+        max_iter=int(args.max_iter),
+        random_state=int(getattr(args, "seed", 42)),
+    )
     return Pipeline([("pre", pre), ("clf", clf)])
 
 
@@ -216,6 +225,10 @@ def main() -> None:
     df = pd.read_csv(train_path)
     if cfg.target_col not in df.columns:
         raise ValueError(f"Missing target column '{cfg.target_col}' in cleaned train file.")
+
+    # Stabilize row order to make CV splits reproducible even if CSV row order changes.
+    if cfg.id_col in df.columns:
+        df = df.sort_values(cfg.id_col, kind="mergesort").reset_index(drop=True)
 
     y = pd.to_numeric(df[cfg.target_col], errors="raise").astype(int).to_numpy()
     labels = sorted(np.unique(y).tolist())
@@ -282,6 +295,13 @@ def main() -> None:
         "run_id": run_id,
         "utc_time": datetime.now(timezone.utc).isoformat(),
         "git_commit": commit,
+        "env": {
+            "python": sys.version,
+            "platform": platform.platform(),
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "sklearn": sklearn.__version__,
+        },
         "data": {
             "train_path": str(train_path),
             "rows": int(len(df)),
