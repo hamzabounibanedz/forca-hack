@@ -113,6 +113,7 @@ def _build_training_args_kwargs(
     warmup_ratio: float,
     seed: int,
     fp16: bool,
+    label_smoothing_factor: float = 0.0,
     eval_strategy: str = "epoch",
     save_strategy: str = "epoch",
     save_total_limit: int = 2,
@@ -162,6 +163,10 @@ def _build_training_args_kwargs(
     if "dataloader_num_workers" in params:
         kwargs["dataloader_num_workers"] = int(max(0, dataloader_num_workers))
 
+    # label smoothing (helps generalization on small/noisy datasets)
+    if "label_smoothing_factor" in params and float(label_smoothing_factor) > 0:
+        kwargs["label_smoothing_factor"] = float(label_smoothing_factor)
+
     return kwargs
 
 
@@ -182,6 +187,7 @@ def train_transformer_cv(
     lr: float,
     weight_decay: float,
     warmup_ratio: float,
+    label_smoothing_factor: float,
     add_meta: bool,
     add_flags: bool,
     early_stopping_patience: int,
@@ -295,7 +301,41 @@ def train_transformer_cv(
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     fold_scores: list[float] = []
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    # Tokenizer: if resuming an existing run, prefer the tokenizer from any existing fold
+    # to avoid token/id mismatches across folds.
+    tok_from_existing: Path | None = None
+    if resume:
+        prefix = f"{model_name.replace('/', '_')}_fold"
+        for d in sorted(output_dir.glob(f"{prefix}*")):
+            if (d / "tokenizer_config.json").exists() or (d / "vocab.txt").exists() or (d / "tokenizer.json").exists():
+                tok_from_existing = d
+                break
+
+    tokenizer = AutoTokenizer.from_pretrained(str(tok_from_existing) if tok_from_existing else model_name, use_fast=True)
+
+    # Make meta/flag/PII tokens atomic (single token) to increase signal.
+    # Only add when starting a fresh run (otherwise keep tokenizer consistent with existing folds).
+    added_special_tokens = 0
+    if tok_from_existing is None:
+        special: list[str] = []
+        if add_meta:
+            special.extend(["[PLATFORM]", "[TEXT]"])
+        if add_flags:
+            special.extend([f"[{name}]" for name, _ in _FLAG_SPECS])
+        # PII placeholders appear in cleaned text; treat them as atomic too.
+        special.extend([cfg.phone_token, cfg.email_token, cfg.url_token, cfg.id_token])
+
+        # de-dupe while preserving order
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for t in special:
+            if t not in seen:
+                seen.add(t)
+                deduped.append(t)
+
+        if deduped:
+            added_special_tokens = int(tokenizer.add_special_tokens({"additional_special_tokens": deduped}))
+
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=8 if fp16 else None)
 
     # Global class weights (from full train) for stability
@@ -356,6 +396,8 @@ def train_transformer_cv(
             id2label={i: str(id2label[i]) for i in range(num_labels)},
             label2id={str(k): int(v) for k, v in label2id.items()},
         )
+        if added_special_tokens > 0:
+            model.resize_token_embeddings(len(tokenizer))
 
         training_args_kwargs = _build_training_args_kwargs(
             output_dir=str(fold_dir),
@@ -369,6 +411,7 @@ def train_transformer_cv(
             warmup_ratio=warmup_ratio,
             seed=seed,
             fp16=fp16,
+            label_smoothing_factor=label_smoothing_factor,
         )
         from transformers import TrainingArguments
 
@@ -419,6 +462,7 @@ def train_transformer_cv(
         "lr": lr,
         "weight_decay": weight_decay,
         "warmup_ratio": warmup_ratio,
+        "label_smoothing_factor": float(label_smoothing_factor),
         "add_meta": add_meta,
         "add_flags": add_flags,
         "early_stopping_patience": early_stopping_patience,
@@ -447,6 +491,12 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=3e-5)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--warmup_ratio", type=float, default=0.06)
+    parser.add_argument(
+        "--label_smoothing",
+        type=float,
+        default=0.0,
+        help="Optional label smoothing factor (0.02-0.10 often helps on small/noisy data).",
+    )
     parser.add_argument("--add_meta", action="store_true", help="Prepend platform tokens to text.")
     parser.add_argument("--add_flags", action="store_true", help="Prepend high-signal intent flags to text.")
     parser.add_argument("--early_stopping_patience", type=int, default=2)
@@ -507,6 +557,7 @@ def main() -> None:
         lr=args.lr,
         weight_decay=args.weight_decay,
         warmup_ratio=args.warmup_ratio,
+        label_smoothing_factor=float(args.label_smoothing),
         add_meta=bool(args.add_meta),
         add_flags=bool(args.add_flags),
         early_stopping_patience=int(args.early_stopping_patience),

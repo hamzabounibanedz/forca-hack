@@ -32,10 +32,13 @@ TIME_FEATURES: tuple[str, ...] = (
     "handle_year",
     "handle_month",
     "handle_day",
+    "handle_dayofyear",
     "handle_dayofweek",
     "handle_hour",
     "handle_minute",
     "handle_iso_week",
+    # Single monotonic time feature (helps linear models capture ordering across months)
+    "handle_time_ordinal",
     "handle_is_weekend",
     "handle_time_missing",
 )
@@ -91,7 +94,8 @@ def add_time_features(df: pd.DataFrame, *, datetime_col: str = "handle_time") ->
     """
     Create time features from parsed datetime:
     - handle_year, handle_month, handle_day
-    - handle_dayofweek, handle_hour, handle_minute, handle_iso_week
+    - handle_dayofyear, handle_dayofweek, handle_hour, handle_minute, handle_iso_week
+    - handle_time_ordinal (days since Unix epoch, missing=-1)
     - handle_is_weekend, handle_time_missing
 
     Missing/invalid datetimes are encoded as -1 (float32) for stability in classical models.
@@ -108,6 +112,7 @@ def add_time_features(df: pd.DataFrame, *, datetime_col: str = "handle_time") ->
     year = dt.dt.year.astype("float32").fillna(-1.0)
     month = dt.dt.month.astype("float32").fillna(-1.0)
     day = dt.dt.day.astype("float32").fillna(-1.0)
+    dayofyear = dt.dt.dayofyear.astype("float32").fillna(-1.0)
     dow = dt.dt.dayofweek.astype("float32").fillna(-1.0)
     hour = dt.dt.hour.astype("float32").fillna(-1.0)
     minute = dt.dt.minute.astype("float32").fillna(-1.0)
@@ -117,13 +122,23 @@ def add_time_features(df: pd.DataFrame, *, datetime_col: str = "handle_time") ->
     is_weekend = np.where(dow >= 0, pd.Series(dow).isin([5.0, 6.0]).to_numpy(), -1.0).astype("float32")
     time_missing = missing.astype("float32")
 
+    # Single monotonic time feature (helps linear models capture ordering across months)
+    # Encode as days since Unix epoch (1970-01-01). Missing -> -1.
+    # Note: dt.astype('int64') yields nanoseconds; divide by (86400*1e9) -> days.
+    dt_ns = dt.astype("int64")  # NaT -> min int64 sentinel
+    # Replace NaT sentinel with NaN before scaling to avoid huge negative.
+    dt_ns = dt_ns.where(~missing, other=np.nan)
+    time_ordinal = (dt_ns / (86400.0 * 1e9)).astype("float32").fillna(-1.0)
+
     out["handle_year"] = year
     out["handle_month"] = month
     out["handle_day"] = day
+    out["handle_dayofyear"] = dayofyear
     out["handle_dayofweek"] = dow
     out["handle_hour"] = hour
     out["handle_minute"] = minute
     out["handle_iso_week"] = iso_week
+    out["handle_time_ordinal"] = time_ordinal
     out["handle_is_weekend"] = is_weekend
     out["handle_time_missing"] = time_missing
     return out
