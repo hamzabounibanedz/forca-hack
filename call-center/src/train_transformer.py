@@ -145,7 +145,14 @@ class WeightedTrainer(Trainer):
         if labels is None:
             loss = outputs.get("loss")
         else:
-            loss_fct = torch.nn.CrossEntropyLoss(weight=self._class_weights)
+            # IMPORTANT: HuggingFace moves model + batch tensors to GPU automatically.
+            # Keep class weights on the same device as logits to avoid device mismatch errors.
+            w = self._class_weights
+            if w is not None and hasattr(logits, "device") and w.device != logits.device:
+                w = w.to(logits.device)
+            if hasattr(labels, "device") and hasattr(logits, "device") and labels.device != logits.device:
+                labels = labels.to(logits.device)
+            loss_fct = torch.nn.CrossEntropyLoss(weight=w)
             loss = loss_fct(logits, labels)
         return (loss, outputs) if return_outputs else loss
 
@@ -246,11 +253,16 @@ def main() -> None:
     vc = pd.Series(y).value_counts().to_dict()
     n = len(y)
     k = len(labels)
-    # weights in label order [0..n-1] but labels are 0..5 here
-    w = np.zeros((max(labels) + 1,), dtype="float32")
+    # Build weight vector aligned with class indices [0..num_labels-1].
+    # NOTE: in this competition labels are 0..5, but keep it defensive.
+    num_labels = int(model.config.num_labels)
+    w = np.ones((num_labels,), dtype="float32")
     for cls in labels:
-        w[int(cls)] = float(n / (k * vc[int(cls)]))
-    w_t = torch.tensor(w, dtype=torch.float32, device=model.device)
+        ci = int(cls)
+        if 0 <= ci < num_labels and ci in vc:
+            w[ci] = float(n / (k * vc[ci]))
+    # Keep on CPU; we move it to the right device inside compute_loss.
+    w_t = torch.tensor(w, dtype=torch.float32)
 
     ds_tr = TextClsDataset([text[i] for i in tr_idx], [int(y[i]) for i in tr_idx], tokenizer, int(args.max_length))
     ds_va = TextClsDataset([text[i] for i in va_idx], [int(y[i]) for i in va_idx], tokenizer, int(args.max_length))
