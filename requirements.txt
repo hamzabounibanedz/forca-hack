@@ -9,5 +9,7 @@ lightgbm
 catboost
 transformers
 torch
+accelerate
+sentencepiece
 kaggle
 
