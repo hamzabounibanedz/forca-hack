@@ -350,7 +350,11 @@ def train_transformer_cv(
     if tok_from_existing is None:
         special: list[str] = []
         if add_meta:
-            special.extend(["[PLATFORM]", "[TEXT]"])
+            special.append("[PLATFORM]")
+        # We always prepend [TEXT] when we use any wrapper format (meta or flags).
+        # So make it atomic whenever add_meta or add_flags is enabled.
+        if add_meta or add_flags:
+            special.append("[TEXT]")
         if add_flags:
             special.extend([f"[{name}]" for name, _ in _FLAG_SPECS])
         # PII placeholders appear in cleaned text; treat them as atomic too.

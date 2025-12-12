@@ -313,6 +313,8 @@ def _predict_proba_transformer(
     model.to(device)
 
     allowed_special = set(getattr(tokenizer, "additional_special_tokens", []) or [])
+    # If tokenizer has no additional special tokens, don't filter (old runs).
+    allowed_special = allowed_special if len(allowed_special) > 0 else None
     texts = _format_transformer_text(
         df_test_clean,
         cfg,
