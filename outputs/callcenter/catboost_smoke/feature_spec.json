@@ -1,0 +1,97 @@
+{
+  "run_id": "20251211_225844_utc",
+  "utc_time": "2025-12-11T23:00:03.808522+00:00",
+  "clean_dir": "outputs\\callcenter\\clean",
+  "train_path": "outputs\\callcenter\\clean\\train_clean.csv",
+  "cat_cols": [
+    "tt_status",
+    "dept_initial",
+    "service_request_type",
+    "subs_level",
+    "customer_level",
+    "dept_traitement",
+    "tech_comm",
+    "service_type",
+    "dot",
+    "actel"
+  ],
+  "text_cols": [
+    "service_content"
+  ],
+  "num_cols": [
+    "handle_year",
+    "handle_month",
+    "handle_day",
+    "handle_dayofweek",
+    "handle_hour",
+    "handle_minute",
+    "handle_iso_week",
+    "handle_is_weekend",
+    "handle_time_missing"
+  ],
+  "datetime_col": "handle_time",
+  "dropped_cols": [
+    "id",
+    "sn",
+    "class_int"
+  ],
+  "config": {
+    "id_col_raw": "id",
+    "target_col_raw": "class_int",
+    "raw_to_canon": {
+      "id": "id",
+      "SN": "sn",
+      "Handle time": "handle_time",
+      "TT status": "tt_status",
+      "Dept. for initial handling": "dept_initial",
+      "Service request type": "service_request_type",
+      "Subs Level": "subs_level",
+      "Customer level": "customer_level",
+      "Service content": "service_content",
+      "Département de traitement": "dept_traitement",
+      "Tech/Comm": "tech_comm",
+      "Type": "service_type",
+      "DOT": "dot",
+      "ACTEL's": "actel",
+      "class_int": "class_int"
+    },
+    "id_col": "id",
+    "target_col": "class_int",
+    "datetime_col": "handle_time",
+    "text_col": "service_content",
+    "cat_cols": [
+      "tt_status",
+      "dept_initial",
+      "service_request_type",
+      "subs_level",
+      "customer_level",
+      "dept_traitement",
+      "tech_comm",
+      "service_type",
+      "dot",
+      "actel"
+    ],
+    "keep_cols": [
+      "id",
+      "sn",
+      "handle_time",
+      "service_content",
+      "tt_status",
+      "dept_initial",
+      "service_request_type",
+      "subs_level",
+      "customer_level",
+      "dept_traitement",
+      "tech_comm",
+      "service_type",
+      "dot",
+      "actel"
+    ],
+    "lower": true,
+    "remove_accents": true,
+    "keep_sn_in_outputs": true,
+    "clean_train_name": "train_clean.csv",
+    "clean_test_name": "test_clean.csv",
+    "run_summary_name": "run_summary.json"
+  }
+}
