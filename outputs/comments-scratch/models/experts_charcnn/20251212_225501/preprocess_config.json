@@ -1,0 +1,23 @@
+{
+  "id_col": "id",
+  "platform_col": "platform",
+  "text_col": "comment",
+  "target_col": "label",
+  "clean_train_name": "train_clean.csv",
+  "clean_test_name": "test_clean.csv",
+  "run_summary_name": "run_summary.json",
+  "lower": true,
+  "remove_accents_latin": true,
+  "normalize_arabic": true,
+  "mask_pii": true,
+  "mask_long_ids": true,
+  "long_id_min_digits": 6,
+  "reduce_elongations": true,
+  "canonicalize_telecom": true,
+  "collapse_whitespace": true,
+  "keep_raw_cols": true,
+  "phone_token": "<PHONE>",
+  "email_token": "<EMAIL>",
+  "url_token": "<URL>",
+  "id_token": "<ID>"
+}

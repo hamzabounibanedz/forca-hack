@@ -1,0 +1,41 @@
+{
+  "task": "comments_scratch_experts_charcnn",
+  "timestamp_utc": "2025-12-12T22:55:01.965689+00:00",
+  "train_path": "C:\\Users\\User\\Desktop\\AI\\forca-hack\\comments-scratch\\data\\train.csv",
+  "run_dir": "C:\\Users\\User\\Desktop\\AI\\forca-hack\\outputs\\comments-scratch\\models\\experts_charcnn\\20251212_225501",
+  "n_splits": 2,
+  "seed": 42,
+  "formatting": {
+    "add_meta": false,
+    "add_flags": true
+  },
+  "experts": {
+    "fr": {
+      "expert": "fr",
+      "tokenization": "word",
+      "device": "cpu",
+      "vocab_size": 2124,
+      "oof_macro_f1": 0.2689219842596684,
+      "fold_scores": [
+        0.22992372382000306,
+        0.2929349893091459
+      ],
+      "fold_details": [
+        {
+          "fold": 1,
+          "macro_f1": 0.22992372382000306,
+          "best_f1": 0.22992372382000306,
+          "best_epoch": 1,
+          "epochs_ran": 1
+        },
+        {
+          "fold": 2,
+          "macro_f1": 0.2929349893091459,
+          "best_f1": 0.2929349893091459,
+          "best_epoch": 1,
+          "epochs_ran": 1
+        }
+      ]
+    }
+  }
+}

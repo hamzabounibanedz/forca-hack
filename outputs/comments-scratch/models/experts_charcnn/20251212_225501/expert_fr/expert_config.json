@@ -1,0 +1,34 @@
+{
+  "expert": "fr",
+  "tokenization": "word",
+  "model": {
+    "vocab_size": 2124,
+    "num_classes": 9,
+    "max_len": 96,
+    "embedding_dim": 128,
+    "num_filters": 128,
+    "kernel_sizes": [
+      3,
+      4,
+      5
+    ],
+    "hidden_dim": 0,
+    "dropout": 0.2
+  },
+  "training": {
+    "epochs": 1,
+    "batch_size": 128,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "optimizer": "adam",
+    "dropout": 0.2,
+    "label_smoothing": 0.0,
+    "grad_clip": 1.0,
+    "early_stopping_patience": 0,
+    "augment_prob": 0.0,
+    "word_drop_prob": 0.1,
+    "char_drop_prob": 0.05,
+    "char_swap_prob": 0.1,
+    "off_group_weight": 0.25
+  }
+}

@@ -1,0 +1,138 @@
+{
+  "paths": {
+    "train": "forca-hack\\comments-scratch\\data\\train.csv",
+    "test": "forca-hack\\comments-scratch\\data\\test_file.csv"
+  },
+  "train": {
+    "rows": 1791,
+    "label_counts": {
+      "1": 199,
+      "2": 199,
+      "3": 199,
+      "4": 199,
+      "5": 199,
+      "6": 199,
+      "7": 199,
+      "8": 199,
+      "9": 199
+    },
+    "platform_counts": {
+      "facebook": 1587,
+      "instagram": 93,
+      "linkedin": 65,
+      "twitter": 32,
+      "youtube": 5,
+      "idoom_market": 5,
+      "tiktok": 4
+    },
+    "dup_comments": 7,
+    "length": {
+      "min": 2,
+      "max": 634,
+      "mean": 63.963707426018985,
+      "quantiles": {
+        "0.0": 2.0,
+        "0.25": 29.0,
+        "0.5": 48.0,
+        "0.75": 77.0,
+        "0.9": 126.0,
+        "0.95": 167.5,
+        "0.99": 287.0999999999999,
+        "1.0": 634.0
+      }
+    },
+    "script": {
+      "pct_ar_dominant_ge_055": 0.852037967615857,
+      "pct_lat_dominant_ge_055": 0.12171970965940815,
+      "pct_has_arabizi_token": 0.01507537688442211,
+      "mean_ar_ratio": 0.7866739630699158,
+      "mean_lat_ratio": 0.2099759727716446
+    },
+    "groups": {
+      "ar": 1079,
+      "dz_ar": 449,
+      "fr": 199,
+      "mixed": 44,
+      "dz_lat": 20
+    },
+    "flag_prevalence": {
+      "FIBRE": 0.15522054718034617,
+      "MODEM": 0.16080402010050251,
+      "PORTAL": 0.11222780569514237,
+      "PRICES": 0.044109436069235064,
+      "OUTAGE": 0.06532663316582915,
+      "WAIT": 0.14461194863204913,
+      "LOCATION": 0.10106085985482971
+    }
+  },
+  "test": {
+    "rows": 30211,
+    "platform_counts": {
+      "facebook": 26837,
+      "instagram": 2366,
+      "linkedin": 360,
+      "twitter": 172,
+      "idoom_market": 122,
+      "tiktok": 121,
+      "UNK": 78,
+      "facebookbonne_continuation": 55,
+      "youtube": 49,
+      "facebook_adsl_fibre_fibre": 42,
+      "facebook_pon_100_mise_en_service": 5,
+      "facebook_pon_100": 2,
+      "instagram_adsl": 1,
+      "facebookvous_etes_toop_retablissement_de_la_conection_dans_un_temps_record_merci_et_jour_ferie": 1
+    },
+    "platform_noise": {
+      "unknown_rate": 0.0035086557876270233,
+      "unknown_unique": 6,
+      "top_unknown": {
+        "facebookbonne_continuation": 55,
+        "facebook_adsl_fibre_fibre": 42,
+        "facebook_pon_100_mise_en_service": 5,
+        "facebook_pon_100": 2,
+        "instagram_adsl": 1,
+        "facebookvous_etes_toop_retablissement_de_la_conection_dans_un_temps_record_merci_et_jour_ferie": 1
+      }
+    },
+    "dup_comments": 275,
+    "length": {
+      "min": 1,
+      "max": 1382,
+      "mean": 71.55089205918374,
+      "quantiles": {
+        "0.0": 1.0,
+        "0.25": 31.0,
+        "0.5": 52.0,
+        "0.75": 88.0,
+        "0.9": 144.0,
+        "0.95": 193.0,
+        "0.99": 332.0,
+        "1.0": 1382.0
+      }
+    },
+    "script": {
+      "pct_ar_dominant_ge_055": 0.8781900632220052,
+      "pct_lat_dominant_ge_055": 0.10906623415312304,
+      "pct_has_arabizi_token": 0.02677832577537983,
+      "mean_ar_ratio": 0.8306624889373779,
+      "mean_lat_ratio": 0.16665637493133545
+    },
+    "groups": {
+      "ar": 18065,
+      "dz_ar": 8522,
+      "fr": 2585,
+      "dz_lat": 714,
+      "mixed": 325
+    },
+    "flag_prevalence": {
+      "FIBRE": 0.13845950150607395,
+      "MODEM": 0.11975770414749594,
+      "PORTAL": 0.01621925788620039,
+      "PRICES": 0.02283936314587402,
+      "OUTAGE": 0.06454602628181788,
+      "WAIT": 0.16368210254543047,
+      "LOCATION": 0.12058521730495515
+    }
+  }
+}
