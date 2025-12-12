@@ -315,8 +315,8 @@ def main() -> None:
     ta_kwargs = {k: v for k, v in ta_kwargs.items() if k in ta_params}
     train_args = TrainingArguments(**ta_kwargs)
 
-    # Use processing_class instead of tokenizer for Transformers 5.0+ compatibility
-    # (tokenizer still works but is deprecated)
+    # Use processing_class instead of tokenizer for newer Transformers compatibility
+    # (tokenizer still works in older versions but can be deprecated in newer ones)
     trainer_kwargs: dict[str, Any] = {
         "model": model,
         "args": train_args,
@@ -325,11 +325,11 @@ def main() -> None:
         "compute_metrics": compute_metrics,
         "class_weights": w_t,
     }
-    # Check if Trainer accepts processing_class (new API) or tokenizer (old API)
-    trainer_init_sig = inspect.signature(WeightedTrainer.__init__)
+    # NOTE: WeightedTrainer.__init__ uses *args/**kwargs, so inspect Trainer.__init__.
+    trainer_init_sig = inspect.signature(Trainer.__init__)
     if "processing_class" in trainer_init_sig.parameters:
         trainer_kwargs["processing_class"] = tokenizer
-    else:
+    elif "tokenizer" in trainer_init_sig.parameters:
         trainer_kwargs["tokenizer"] = tokenizer
     trainer = WeightedTrainer(**trainer_kwargs)
 

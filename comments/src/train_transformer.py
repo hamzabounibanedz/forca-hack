@@ -308,6 +308,9 @@ def train_transformer_cv(
 
     folds_set = set(int(x) for x in train_folds) if train_folds else None
 
+    def _has_saved_weights(p: Path) -> bool:
+        return any((p / name).exists() for name in ("model.safetensors", "pytorch_model.bin", "pytorch_model.safetensors"))
+
     for fold, (tr_idx, va_idx) in enumerate(skf.split(texts, y), start=1):
         if folds_set is not None and fold not in folds_set:
             continue
@@ -322,8 +325,9 @@ def train_transformer_cv(
         ds_tr = TextDataset(train_texts, y_tr, tokenizer, max_length)
         ds_va = TextDataset(val_texts, y_va, tokenizer, max_length)
 
-        # Resume mode: if a fold is already trained (has config.json), skip training and just evaluate.
-        if resume and (fold_dir / "config.json").exists():
+        # Resume mode: only skip when the fold directory has BOTH config and weights.
+        # (If training was interrupted, config.json may exist but weights may be missing.)
+        if resume and (fold_dir / "config.json").exists() and _has_saved_weights(fold_dir):
             from transformers import TrainingArguments
 
             model = AutoModelForSequenceClassification.from_pretrained(str(fold_dir))
