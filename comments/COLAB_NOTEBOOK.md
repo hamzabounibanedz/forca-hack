@@ -11,16 +11,17 @@
 ```python
 # Mount Google Drive
 from google.colab import drive
-drive.mount('/content/drive')
-
-# Navigate to your team directory
 import os
-os.chdir('/content/drive/MyDrive/FORSA_team')
+import shutil
 
-# Install dependencies
-!pip install -q transformers torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-!pip install -q pandas numpy scikit-learn tqdm joblib
-!pip install -q accelerate
+# If you ever see: "Mountpoint must not already contain files"
+# it means /content/drive is not empty. Clean it and remount.
+shutil.rmtree('/content/drive', ignore_errors=True)
+os.makedirs('/content/drive', exist_ok=True)
+drive.mount('/content/drive', force_remount=True)
+
+# Install dependencies (from repo requirements)
+!pip install -r forca-hack/requirements.txt
 
 # Verify installation
 import torch
@@ -33,17 +34,8 @@ if torch.cuda.is_available():
 ### Code Block 2: Clone/Pull Repository
 
 ```python
-# Option A: If you have a git repo
-# !git clone <YOUR_REPO_URL>
-# %cd <REPO_FOLDER>
-
-# Option B: If code is already in Drive, just navigate
-import sys
-# Add your code path to Python path
-# sys.path.insert(0, '/content/drive/MyDrive/FORSA_team/forca-hack/comments/src')
-
-# For now, let's assume code is in Drive at: FORSA_team/forca-hack/
-# We'll work from there
+!git clone <YOUR_REPO_URL>
+%cd <YOUR_REPO_FOLDER>/forca-hack
 ```
 
 ---
@@ -53,35 +45,24 @@ import sys
 ### Code Block 3: Check Data Files Exist
 
 ```python
-import pandas as pd
 from pathlib import Path
 
-# Your data location
-data_dir = Path('/content/drive/MyDrive/FORSA_team/data/social')
-train_path = data_dir / 'train.csv'
-test_path = data_dir / 'test_file.csv'  # or 'test.csv'
+# 1) Find where your dataset is on Drive (prints candidates)
+!find /content/drive/MyDrive -type f -name "train.csv" | head -20
+!find /content/drive/MyDrive -type f -name "test_file.csv" | head -20
 
-print("Checking data files...")
-print(f"Train exists: {train_path.exists()} -> {train_path}")
-print(f"Test exists: {test_path.exists()} -> {test_path}")
-
-if train_path.exists():
-    df_train = pd.read_csv(train_path, nrows=5)
-    print(f"\nTrain columns: {list(df_train.columns)}")
-    print(f"Train shape (sample): {df_train.shape}")
-
-if test_path.exists():
-    df_test = pd.read_csv(test_path, nrows=5)
-    print(f"\nTest columns: {list(df_test.columns)}")
-    print(f"Test shape (sample): {df_test.shape}")
+# 2) Set your data folder here (the folder that contains train.csv and test_file.csv)
+DATA_DIR = Path("/content/drive/MyDrive/<PUT_YOUR_FOLDER_HERE>")
+print("DATA_DIR exists:", DATA_DIR.exists(), DATA_DIR)
+print("Files:", [p.name for p in DATA_DIR.glob("*.csv")])
 ```
 
 ### Code Block 4: Validate Preprocessing (Sanity Checks)
 
 ```python
-# Run validation (using team_dir - it will auto-detect data/social)
-!python /content/drive/MyDrive/FORSA_team/forca-hack/comments/src/validate_preprocess.py \
-  --team_dir /content/drive/MyDrive/FORSA_team \
+# Run validation (use --data_dir so folder naming doesn't matter)
+!python comments/src/validate_preprocess.py \
+  --data_dir "$DATA_DIR" \
   --train_filename train.csv \
   --test_filename test_file.csv
 ```
@@ -89,29 +70,28 @@ if test_path.exists():
 ### Code Block 5: Generate Cleaned Datasets
 
 ```python
-# Generate cleaned train/test CSVs (using team_dir - auto-detects paths)
-!python /content/drive/MyDrive/FORSA_team/forca-hack/comments/src/make_clean_dataset.py \
-  --team_dir /content/drive/MyDrive/FORSA_team \
+# Where to write outputs on Drive
+OUT_DIR = Path("/content/drive/MyDrive/forsa_outputs/comments/clean")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+!python comments/src/make_clean_dataset.py \
+  --data_dir "$DATA_DIR" \
+  --output_dir "$OUT_DIR" \
   --train_filename train.csv \
   --test_filename test_file.csv
 
-# Verify cleaned files were created
-from pathlib import Path
-clean_dir = Path('/content/drive/MyDrive/FORSA_team/outputs/comments/clean')
-print("\nCleaned files:")
-for f in sorted(clean_dir.glob('*.csv')):
-    print(f"  {f.name} ({f.stat().st_size / 1024:.1f} KB)")
+print("Cleaned outputs:", list(OUT_DIR.glob("*.csv")))
 ```
 
 ### Code Block 6: (Optional) Dataset Analysis Report
 
 ```python
 # Generate relationships report (helps understand class patterns)
-!python /content/drive/MyDrive/FORSA_team/forca-hack/comments/src/analyze_relations.py \
-  --team_dir /content/drive/MyDrive/FORSA_team \
+!python comments/src/analyze_relations.py \
+  --data_dir "$DATA_DIR" \
   --train_filename train.csv \
   --after_clean \
-  --out_json /content/drive/MyDrive/FORSA_team/outputs/comments/analysis/relations.json
+  --out_json /content/drive/MyDrive/forsa_outputs/comments/analysis/relations.json
 
 print("\nAnalysis complete. Check the JSON file for detailed class relationships.")
 ```
@@ -124,8 +104,9 @@ print("\nAnalysis complete. Check the JSON file for detailed class relationships
 
 ```python
 # Train XLM-R with metadata + flags
-!python /content/drive/MyDrive/FORSA_team/forca-hack/comments/src/train_transformer.py \
-  --team_dir /content/drive/MyDrive/FORSA_team \
+!python comments/src/train_transformer.py \
+  --data_dir "$DATA_DIR" \
+  --output_dir /content/drive/MyDrive/forsa_outputs/comments/models/transformers \
   --train_filename train.csv \
   --model_name xlm-roberta-base \
   --n_splits 5 \
@@ -148,8 +129,9 @@ print("\nAnalysis complete. Check the JSON file for detailed class relationships
 
 ```python
 # Train DziriBERT (Algerian dialect model)
-!python /content/drive/MyDrive/FORSA_team/forca-hack/comments/src/train_transformer.py \
-  --team_dir /content/drive/MyDrive/FORSA_team \
+!python comments/src/train_transformer.py \
+  --data_dir "$DATA_DIR" \
+  --output_dir /content/drive/MyDrive/forsa_outputs/comments/models/transformers \
   --train_filename train.csv \
   --model_name alger-ia/dziribert \
   --n_splits 5 \
@@ -174,6 +156,11 @@ import json
 from pathlib import Path
 
 models_dir = Path('/content/drive/MyDrive/FORSA_team/outputs/comments/models/transformers')
+runs = sorted([d for d in models_dir.iterdir() if d.is_dir()]) if models_dir.exists() else []
+
+if not runs:
+    models_dir = Path('/content/drive/MyDrive/forsa_outputs/comments/models/transformers')
+    runs = sorted([d for d in models_dir.iterdir() if d.is_dir()])
 runs = sorted([d for d in models_dir.iterdir() if d.is_dir()])
 
 print("Trained model runs:")
@@ -215,6 +202,11 @@ if dziri_runs:
 from pathlib import Path
 
 models_dir = Path('/content/drive/MyDrive/FORSA_team/outputs/comments/models/transformers')
+runs = sorted([d for d in models_dir.iterdir() if d.is_dir()]) if models_dir.exists() else []
+
+if not runs:
+    models_dir = Path('/content/drive/MyDrive/forsa_outputs/comments/models/transformers')
+    runs = sorted([d for d in models_dir.iterdir() if d.is_dir()])
 runs = sorted([d for d in models_dir.iterdir() if d.is_dir()])
 
 # Find XLM-R and DziriBERT runs (use most recent)
@@ -245,12 +237,12 @@ else:
     # Create submission (join paths with spaces for command line)
     model_paths_str = ' '.join(model_paths)
 
-    !python /content/drive/MyDrive/FORSA_team/forca-hack/comments/src/predict.py \
-      --team_dir /content/drive/MyDrive/FORSA_team \
+    !python comments/src/predict.py \
+      --data_dir "$DATA_DIR" \
       --test_filename test_file.csv \
       --model_paths {model_paths_str} \
       --transformer_add_meta --transformer_add_flags \
-      --output_csv /content/drive/MyDrive/FORSA_team/outputs/comments/submissions/final_ensemble.csv
+      --output_csv /content/drive/MyDrive/forsa_outputs/comments/submissions/final_ensemble.csv
 
     print("\n✅ Submission file created!")
 ```

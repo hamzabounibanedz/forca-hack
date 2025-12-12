@@ -255,15 +255,24 @@ def train_transformer_cv(
             super().__init__(*args, **kwargs)
             self.class_weights = class_weights
 
-        def compute_loss(self, model, inputs, return_outputs=False):
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            """
+            Compatible with newer Transformers Trainer which may pass extra kwargs
+            like `num_items_in_batch`.
+            """
             labels = inputs.get("labels")
+            if labels is None:
+                return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+
             outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
             logits = outputs.logits
+
             if self.class_weights is None:
-                loss = torch.nn.functional.cross_entropy(logits, labels)
+                loss_fct = torch.nn.CrossEntropyLoss()
             else:
                 loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights.to(logits.device))
-                loss = loss_fct(logits, labels)
+
+            loss = loss_fct(logits, labels)
             return (loss, outputs) if return_outputs else loss
 
     # --- CV loop ---
