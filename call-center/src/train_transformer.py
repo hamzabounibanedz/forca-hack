@@ -41,6 +41,7 @@ import sklearn
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, classification_report
 
+import inspect
 import torch
 from torch.utils.data import Dataset
 from transformers import (
@@ -260,26 +261,38 @@ def main() -> None:
         macro = f1_score(labels_np, pred, average="macro", zero_division=0)
         return {"macro_f1": float(macro)}
 
-    train_args = TrainingArguments(
-        output_dir=str(artifacts_dir / "checkpoints"),
-        num_train_epochs=int(args.epochs),
-        per_device_train_batch_size=int(args.batch_size),
-        per_device_eval_batch_size=int(args.batch_size),
-        learning_rate=float(args.lr),
-        weight_decay=float(args.weight_decay),
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        logging_strategy="steps",
-        logging_steps=50,
-        load_best_model_at_end=True,
-        metric_for_best_model="macro_f1",
-        greater_is_better=True,
-        save_total_limit=2,
-        report_to=[],
-        seed=int(args.seed),
-        data_seed=int(args.seed),
-        fp16=bool(torch.cuda.is_available()),
-    )
+    # transformers>=4.57 renamed `evaluation_strategy` -> `eval_strategy`.
+    # Build kwargs defensively to support both.
+    ta_sig = inspect.signature(TrainingArguments.__init__)
+    ta_params = set(ta_sig.parameters.keys())
+
+    ta_kwargs: dict[str, Any] = {
+        "output_dir": str(artifacts_dir / "checkpoints"),
+        "num_train_epochs": int(args.epochs),
+        "per_device_train_batch_size": int(args.batch_size),
+        "per_device_eval_batch_size": int(args.batch_size),
+        "learning_rate": float(args.lr),
+        "weight_decay": float(args.weight_decay),
+        "save_strategy": "epoch",
+        "logging_strategy": "steps",
+        "logging_steps": 50,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "macro_f1",
+        "greater_is_better": True,
+        "save_total_limit": 2,
+        "report_to": [],
+        "seed": int(args.seed),
+        "data_seed": int(args.seed),
+        "fp16": bool(torch.cuda.is_available()),
+    }
+    if "evaluation_strategy" in ta_params:
+        ta_kwargs["evaluation_strategy"] = "epoch"
+    elif "eval_strategy" in ta_params:
+        ta_kwargs["eval_strategy"] = "epoch"
+
+    # Filter unknown args for maximal compatibility.
+    ta_kwargs = {k: v for k, v in ta_kwargs.items() if k in ta_params}
+    train_args = TrainingArguments(**ta_kwargs)
 
     trainer = WeightedTrainer(
         model=model,
@@ -359,5 +372,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
