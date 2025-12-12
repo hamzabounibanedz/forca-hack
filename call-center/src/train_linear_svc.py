@@ -108,6 +108,25 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--C", type=float, default=0.25)
     p.add_argument("--max_iter", type=int, default=12000)
 
+    # Optional: save fold models for ensembling at inference time
+    p.add_argument(
+        "--save_fold_models",
+        action="store_true",
+        help="If set, saves each CV fold model to <artifacts_dir>/fold_models/ for ensemble inference.",
+    )
+    p.add_argument(
+        "--fold_models_dirname",
+        type=str,
+        default="fold_models",
+        help="Subfolder name under artifacts_dir used to store fold models.",
+    )
+    p.add_argument(
+        "--joblib_compress",
+        type=int,
+        default=3,
+        help="joblib compression level for saved models (0=no compression).",
+    )
+
     return p.parse_args()
 
 
@@ -243,10 +262,22 @@ def main() -> None:
     X_df = _prepare_frame(df, cfg=cfg, spec=spec)
     model = _build_pipeline(text_col=text_col, cat_cols=cat_cols, num_cols=num_cols, args=args)
 
+    # joblib is needed for model saving (final + optional fold models)
+    try:
+        import joblib  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError("joblib is required (usually installed with scikit-learn).") from e
+
     # CV
     skf = StratifiedKFold(n_splits=int(args.folds), shuffle=True, random_state=int(args.seed))
     oof_pred = np.full(shape=(len(df),), fill_value=-1, dtype=int)
     fold_rows: list[dict[str, Any]] = []
+    fold_model_paths: list[str] = []
+
+    fold_models_dir: Path | None = None
+    if bool(args.save_fold_models):
+        fold_models_dir = artifacts_dir / str(args.fold_models_dirname)
+        fold_models_dir.mkdir(parents=True, exist_ok=True)
 
     for fold, (tr_idx, va_idx) in enumerate(skf.split(X_df, y), start=1):
         X_tr, X_va = X_df.iloc[tr_idx], X_df.iloc[va_idx]
@@ -255,6 +286,12 @@ def main() -> None:
         model.fit(X_tr, y_tr)
         pred_va = model.predict(X_va).astype(int)
         oof_pred[va_idx] = pred_va
+
+        # Optionally persist the fold model (for ensemble inference)
+        if fold_models_dir is not None:
+            fold_model_path = fold_models_dir / f"model_fold{fold}.joblib"
+            joblib.dump(model, fold_model_path, compress=int(args.joblib_compress))
+            fold_model_paths.append(str(fold_model_path))
 
         fold_f1 = metrics_utils.evaluate(y_va, pred_va, labels=labels)
         fold_rows.append(
@@ -276,6 +313,21 @@ def main() -> None:
     per_class_f1 = {str(k): float(v["f1-score"]) for k, v in report.items() if str(k).isdigit()}
     print(f"[train_linear_svc] OOF Macro F1 = {oof_macro_f1:.5f}")
 
+    # Save fold ensemble manifest if requested
+    if fold_model_paths:
+        fold_manifest_path = artifacts_dir / "fold_models.json"
+        _json_dump(
+            fold_manifest_path,
+            {
+                "run_id": run_id,
+                "utc_time": datetime.now(timezone.utc).isoformat(),
+                "n_folds": int(args.folds),
+                "seed": int(args.seed),
+                "model_paths": fold_model_paths,
+                "labels": labels,
+            },
+        )
+
     # Train final model on full data
     model.fit(X_df, y)
 
@@ -285,11 +337,7 @@ def main() -> None:
     feature_spec_path = artifacts_dir / "feature_spec.json"
 
     # Save model (joblib)
-    try:
-        import joblib  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise RuntimeError("joblib is required (usually installed with scikit-learn).") from e
-    joblib.dump(model, model_path)
+    joblib.dump(model, model_path, compress=int(args.joblib_compress))
 
     metrics: dict[str, Any] = {
         "run_id": run_id,
@@ -341,6 +389,12 @@ def main() -> None:
             "model_path": str(model_path),
             "metrics_path": str(metrics_path),
             "feature_spec_path": str(feature_spec_path),
+            "fold_models": {
+                "enabled": bool(fold_model_paths),
+                "n_models": int(len(fold_model_paths)),
+                "dir": str(fold_models_dir) if fold_models_dir is not None else None,
+                "manifest_path": str(artifacts_dir / "fold_models.json") if fold_model_paths else None,
+            },
         },
     }
     _json_dump(metrics_path, metrics)

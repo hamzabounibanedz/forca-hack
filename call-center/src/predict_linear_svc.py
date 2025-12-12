@@ -53,6 +53,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sample_submission_path", type=str, default=None, help="Override sample_submission.csv path.")
     p.add_argument("--run_id", type=str, default=None, help="Run id for submission filename.")
     p.add_argument("--out_path", type=str, default=None, help="Explicit submission output path.")
+    p.add_argument(
+        "--use_fold_ensemble",
+        action="store_true",
+        help="If set, load <artifacts_dir>/fold_models/model_fold*.joblib and average decision scores.",
+    )
+    p.add_argument(
+        "--fold_models_dirname",
+        type=str,
+        default="fold_models",
+        help="Subfolder name under artifacts_dir used to store fold models.",
+    )
     return p.parse_args()
 
 
@@ -108,7 +119,9 @@ def main() -> None:
 
     model_path = Path(args.model_path) if args.model_path else (artifacts_dir / "model.joblib")
     if not model_path.exists():
-        raise FileNotFoundError(f"Model file not found: {model_path}")
+        # If using ensemble, we may not need the full model file.
+        if not args.use_fold_ensemble:
+            raise FileNotFoundError(f"Model file not found: {model_path}")
 
     feature_spec_path = (
         Path(args.feature_spec_path) if args.feature_spec_path else (artifacts_dir / "feature_spec.json")
@@ -139,15 +152,55 @@ def main() -> None:
         import joblib  # type: ignore
     except Exception as e:  # pragma: no cover
         raise RuntimeError("joblib is required (usually installed with scikit-learn).") from e
-    model = joblib.load(model_path)
+    model = None
+    fold_models: list[Any] = []
+    if args.use_fold_ensemble:
+        fold_dir = artifacts_dir / str(args.fold_models_dirname)
+        paths = sorted(fold_dir.glob("model_fold*.joblib"))
+        if not paths:
+            raise FileNotFoundError(f"No fold models found in: {fold_dir}")
+        for pth in paths:
+            fold_models.append(joblib.load(pth))
+        print(f"[predict_linear_svc] Using fold ensemble: n_models={len(fold_models)}")
+    else:
+        model = joblib.load(model_path)
 
     df_test = pd.read_csv(test_path)
     if cfg.id_col not in df_test.columns:
         raise ValueError(f"Missing id column '{cfg.id_col}' in cleaned test file.")
 
     X = _prepare_frame(df_test, cfg=cfg, spec=feature_spec)
-    pred = model.predict(X)
-    pred = np.asarray(pred).reshape(-1).astype(int)
+    if fold_models:
+        # Average decision scores across models (all must have same class ordering)
+        scores_sum = None
+        classes_ref = None
+        for m in fold_models:
+            clf = getattr(m, "named_steps", {}).get("clf") if hasattr(m, "named_steps") else None
+            classes = getattr(clf, "classes_", None) if clf is not None else None
+            s = np.asarray(m.decision_function(X))
+            if s.ndim == 1:
+                s = s.reshape(-1, 1)
+            if scores_sum is None:
+                scores_sum = s.astype("float64")
+                classes_ref = classes
+            else:
+                # Ensure consistent class ordering
+                if classes_ref is not None and classes is not None and list(classes) != list(classes_ref):
+                    raise ValueError(f"Fold model class ordering mismatch: {classes} vs {classes_ref}")
+                scores_sum += s.astype("float64")
+        if scores_sum is None:
+            raise RuntimeError("Fold ensemble produced no scores.")
+        # Argmax over summed scores
+        if classes_ref is None:
+            # Fallback: assume 0..n-1
+            pred = scores_sum.argmax(axis=1)
+        else:
+            pred = np.asarray(classes_ref)[scores_sum.argmax(axis=1)]
+        pred = np.asarray(pred).reshape(-1).astype(int)
+    else:
+        assert model is not None
+        pred = model.predict(X)
+        pred = np.asarray(pred).reshape(-1).astype(int)
 
     # Build Kaggle submission by copying sample submission and replacing target
     df_sub = pd.read_csv(sample_path)
