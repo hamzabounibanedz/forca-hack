@@ -187,6 +187,8 @@ def train_transformer_cv(
     early_stopping_patience: int,
     fp16: bool,
     use_class_weights: bool,
+    train_folds: list[int] | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     """
     Stratified K-fold fine-tuning. Saves each fold checkpoint + metrics.
@@ -217,6 +219,17 @@ def train_transformer_cv(
     texts = _format_text(df, cfg, add_meta=add_meta, add_flags=add_flags)
 
     num_labels = len(label2id)
+
+    # Write mappings early (so interrupted runs can still be used for prediction)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "label_mapping.json").write_text(
+        json.dumps({"label2id": label2id, "id2label": id2label}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (output_dir / "preprocess_config.json").write_text(
+        json.dumps(cfg_to_dict(cfg), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     # --- Dataset wrapper ---
     class TextDataset(Dataset):
@@ -293,7 +306,11 @@ def train_transformer_cv(
         w = w / w.mean()
         class_weights = torch.tensor(w, dtype=torch.float32)
 
+    folds_set = set(int(x) for x in train_folds) if train_folds else None
+
     for fold, (tr_idx, va_idx) in enumerate(skf.split(texts, y), start=1):
+        if folds_set is not None and fold not in folds_set:
+            continue
         fold_dir = output_dir / f"{model_name.replace('/', '_')}_fold{fold}"
         fold_dir.mkdir(parents=True, exist_ok=True)
 
@@ -304,6 +321,30 @@ def train_transformer_cv(
 
         ds_tr = TextDataset(train_texts, y_tr, tokenizer, max_length)
         ds_va = TextDataset(val_texts, y_va, tokenizer, max_length)
+
+        # Resume mode: if a fold is already trained (has config.json), skip training and just evaluate.
+        if resume and (fold_dir / "config.json").exists():
+            from transformers import TrainingArguments
+
+            model = AutoModelForSequenceClassification.from_pretrained(str(fold_dir))
+            eval_args = TrainingArguments(
+                output_dir=str(fold_dir),
+                per_device_eval_batch_size=eval_batch_size,
+                dataloader_num_workers=int(max(0, dataloader_num_workers)),
+                report_to="none",
+            )
+            trainer = Trainer(
+                model=model,
+                args=eval_args,
+                eval_dataset=ds_va,
+                data_collator=data_collator,
+                compute_metrics=compute_metrics,
+            )
+            eval_metrics = trainer.evaluate()
+            f1 = float(eval_metrics.get("eval_macro_f1", eval_metrics.get("macro_f1", 0.0)))
+            fold_scores.append(f1)
+            print(f"[fold {fold}] resumed (skipped training) macro_f1={f1:.5f} -> {fold_dir}")
+            continue
 
         model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
@@ -361,16 +402,6 @@ def train_transformer_cv(
     mean_f1 = float(np.mean(fold_scores)) if fold_scores else 0.0
     std_f1 = float(np.std(fold_scores)) if fold_scores else 0.0
 
-    # Save mapping once at root output dir
-    (output_dir / "label_mapping.json").write_text(
-        json.dumps({"label2id": label2id, "id2label": id2label}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    (output_dir / "preprocess_config.json").write_text(
-        json.dumps(cfg_to_dict(cfg), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
     return {
         "model_name": model_name,
         "n_splits": n_splits,
@@ -417,6 +448,9 @@ def main() -> None:
     parser.add_argument("--early_stopping_patience", type=int, default=2)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--use_class_weights", action="store_true")
+    parser.add_argument("--run_dir", type=str, default=None, help="Use an existing run dir (resume-friendly).")
+    parser.add_argument("--train_folds", type=int, nargs="*", default=None, help="Train only these fold numbers (1..K).")
+    parser.add_argument("--resume", action="store_true", help="Skip already-trained folds found in run_dir.")
     parser.add_argument("--output_dir", type=str, default=None)
     args = parser.parse_args()
 
@@ -444,8 +478,14 @@ def main() -> None:
         out_dir = guess_repo_root() / "outputs" / "comments" / "models" / "transformers"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    run_dir = out_dir / f"{args.model_name.replace('/', '_')}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        resume = True  # run_dir implies resume-safe behavior
+    else:
+        run_dir = out_dir / f"{args.model_name.replace('/', '_')}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        resume = bool(args.resume)
 
     result = train_transformer_cv(
         df_train_raw,
@@ -468,6 +508,8 @@ def main() -> None:
         early_stopping_patience=int(args.early_stopping_patience),
         fp16=bool(args.fp16),
         use_class_weights=bool(args.use_class_weights),
+        train_folds=args.train_folds,
+        resume=resume,
     )
 
     (run_dir / "run_summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

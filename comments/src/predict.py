@@ -106,20 +106,68 @@ def _load_label_mapping(mapping_path: Path) -> tuple[dict[int, int], dict[int, i
     return label2id, id2label
 
 
-def _find_label_mapping_for_model(model_path: Path) -> Path:
+def _load_label_mapping_from_transformer_config(model_dir: Path) -> tuple[dict[int, int], dict[int, int]]:
     """
-    Heuristic:
-    - baseline: <dir>/label_mapping.json
-    - transformer run dir: <dir>/label_mapping.json (saved at run root)
+    Fallback when label_mapping.json is missing (e.g., interrupted training run):
+    parse Hugging Face `config.json` which usually contains `id2label` and/or `label2id`.
+    """
+    cfg_path = model_dir / "config.json"
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Missing config.json in transformer dir: {model_dir}")
+
+    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    id2label_raw = data.get("id2label") or {}
+    label2id_raw = data.get("label2id") or {}
+
+    id2label: dict[int, int] = {}
+    for k, v in id2label_raw.items():
+        ik = int(k)
+        # Most of our runs store labels as numeric strings ("1".."9")
+        try:
+            iv = int(v)
+        except Exception:
+            # If it's not numeric, we cannot safely submit to Kaggle (expects numeric class)
+            raise ValueError(f"Non-numeric id2label value in config.json: {v!r}")
+        id2label[ik] = iv
+
+    label2id: dict[int, int] = {}
+    if label2id_raw:
+        for k, v in label2id_raw.items():
+            try:
+                lk = int(k)
+            except Exception:
+                raise ValueError(f"Non-numeric label2id key in config.json: {k!r}")
+            label2id[lk] = int(v)
+    else:
+        # Invert id2label if label2id not provided
+        label2id = {lbl: i for i, lbl in id2label.items()}
+
+    if not id2label or not label2id:
+        raise ValueError(f"Could not build label mapping from config.json in {model_dir}")
+    return label2id, id2label
+
+
+def _load_label_mapping_for_model(model_path: Path) -> tuple[dict[int, int], dict[int, int]]:
+    """
+    Load label mapping for either:
+    - classical models (joblib/cbm): requires label_mapping.json next to model file
+    - transformers: prefer label_mapping.json at run root; fallback to fold's config.json
     """
     if model_path.is_file():
-        candidates = [model_path.parent / "label_mapping.json"]
-    else:
-        candidates = [model_path / "label_mapping.json", model_path.parent / "label_mapping.json"]
+        mapping = model_path.parent / "label_mapping.json"
+        if mapping.exists():
+            return _load_label_mapping(mapping)
+        raise FileNotFoundError(f"Could not find label_mapping.json near model: {model_path}")
+
+    # transformer directory (fold)
+    candidates = [model_path / "label_mapping.json", model_path.parent / "label_mapping.json"]
     for c in candidates:
         if c.exists():
-            return c
-    raise FileNotFoundError(f"Could not find label_mapping.json near model: {model_path}")
+            return _load_label_mapping(c)
+
+    # Fallback: parse HF config.json inside the fold directory
+    return _load_label_mapping_from_transformer_config(model_path)
 
 
 def _find_preprocess_config_for_model(model_path: Path) -> Path | None:
@@ -291,8 +339,7 @@ def main() -> None:
         weights = list(args.weights)
 
     # Determine global label ordering from first model mapping
-    mapping0 = _find_label_mapping_for_model(model_paths[0])
-    _, id2label0 = _load_label_mapping(mapping0)
+    _, id2label0 = _load_label_mapping_for_model(model_paths[0])
     target_labels_in_order = [id2label0[i] for i in sorted(id2label0.keys())]
 
     proba_sum = None
@@ -300,8 +347,7 @@ def main() -> None:
 
     for w, mp in zip(weights, model_paths, strict=True):
         mp_path = mp
-        mapping_path = _find_label_mapping_for_model(mp_path)
-        _, id2label = _load_label_mapping(mapping_path)
+        _, id2label = _load_label_mapping_for_model(mp_path)
 
         if mp_path.is_file() and mp_path.suffix.lower() in {".joblib", ".pkl"}:
             proba = _predict_proba_sklearn(mp_path, df_test_clean, cfg)
