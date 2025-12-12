@@ -42,19 +42,23 @@ if torch.cuda.is_available():
 
 ## Data Validation & Preprocessing
 
-### Code Block 3: Check Data Files Exist
+### Code Block 3: Check Data Files Exist (and set DATA_DIR correctly)
 
 ```python
 from pathlib import Path
+import os
 
 # 1) Find where your dataset is on Drive (prints candidates)
 !find /content/drive/MyDrive -type f -name "train.csv" | head -20
 !find /content/drive/MyDrive -type f -name "test_file.csv" | head -20
 
 # 2) Set your data folder here (the folder that contains train.csv and test_file.csv)
-DATA_DIR = Path("/content/drive/MyDrive/<PUT_YOUR_FOLDER_HERE>")
+DATA_DIR = Path("/content/drive/MyDrive/FORSA_team/data/social")  # <-- change if needed
 print("DATA_DIR exists:", DATA_DIR.exists(), DATA_DIR)
 print("Files:", [p.name for p in DATA_DIR.glob("*.csv")])
+
+# Export for bash commands (so $DATA_DIR works reliably)
+os.environ["DATA_DIR"] = str(DATA_DIR)
 ```
 
 ### Code Block 4: Validate Preprocessing (Sanity Checks)
@@ -129,19 +133,23 @@ print("\nAnalysis complete. Check the JSON file for detailed class relationships
 
 ```python
 # Train DziriBERT (Algerian dialect model)
+# Important:
+# - DziriBERT tokenizer turns accented French words like "débit" into [UNK].
+#   Our preprocessing removes accents (good).
+# - Use label smoothing for better generalization on noisy social text.
 !python comments/src/train_transformer.py \
   --data_dir "$DATA_DIR" \
   --output_dir /content/drive/MyDrive/forsa_outputs/comments/models/transformers \
   --train_filename train.csv \
   --model_name alger-ia/dziribert \
   --n_splits 5 \
-  --max_length 128 \
+  --max_length 160 \
   --train_batch_size 16 \
   --eval_batch_size 32 \
-  --epochs 4 \
-  --lr 3e-5 \
+  --epochs 6 \
+  --lr 2e-5 \
+  --label_smoothing 0.05 \
   --add_meta --add_flags \
-  --use_class_weights \
   --fp16
 
 # Same as above - watch CV scores
@@ -195,56 +203,25 @@ if dziri_runs:
 
 ## Generate Submission (Ensemble)
 
-### Code Block 10: Create Final Ensemble Submission
+### Code Block 10: Create Submission (robust)
 
 ```python
-# Find the two run directories (adjust names based on Code Block 9 output)
-from pathlib import Path
+# DziriBERT only:
+# Put your run folder name here (from Code Block 9 output).
+DZIRI_RUN = "/content/drive/MyDrive/forsa_outputs/comments/models/transformers/alger-ia_dziribert_YYYYMMDD_HHMMSS"
 
-models_dir = Path('/content/drive/MyDrive/FORSA_team/outputs/comments/models/transformers')
-runs = sorted([d for d in models_dir.iterdir() if d.is_dir()]) if models_dir.exists() else []
+# This auto-expands to all fold checkpoints found in the run directory.
+!python comments/src/predict.py \
+  --data_dir "$DATA_DIR" \
+  --test_filename test_file.csv \
+  --run_dirs "$DZIRI_RUN" \
+  --auto_weights \
+  --transformer_add_meta --transformer_add_flags \
+  --transformer_max_length 160 \
+  --transformer_batch_size 32 \
+  --output_csv /content/drive/MyDrive/forsa_outputs/comments/submissions/dziri_final.csv
 
-if not runs:
-    models_dir = Path('/content/drive/MyDrive/forsa_outputs/comments/models/transformers')
-    runs = sorted([d for d in models_dir.iterdir() if d.is_dir()])
-runs = sorted([d for d in models_dir.iterdir() if d.is_dir()])
-
-# Find XLM-R and DziriBERT runs (use most recent)
-xlmr_runs = [r for r in runs if 'xlm-roberta-base' in r.name and r.name.count('_') >= 2]
-dziri_runs = [r for r in runs if 'dziribert' in r.name and r.name.count('_') >= 2]
-
-if not xlmr_runs or not dziri_runs:
-    print("❌ Need both XLM-R and DziriBERT runs. Check Code Block 9 output.")
-else:
-    xlmr_base = xlmr_runs[-1]  # Most recent
-    dziri_base = dziri_runs[-1]  # Most recent
-
-    print(f"Using XLM-R run: {xlmr_base.name}")
-    print(f"Using DziriBERT run: {dziri_base.name}")
-
-    # Build list of all 10 fold checkpoints (5 XLM-R + 5 DziriBERT)
-    model_paths = []
-    for fold in range(1, 6):
-        xlmr_fold = xlmr_base / f'xlm-roberta-base_fold{fold}'
-        dziri_fold = dziri_base / f'alger-ia_dziribert_fold{fold}'
-        if xlmr_fold.exists():
-            model_paths.append(str(xlmr_fold))
-        if dziri_fold.exists():
-            model_paths.append(str(dziri_fold))
-
-    print(f"\nFound {len(model_paths)} model checkpoints")
-
-    # Create submission (join paths with spaces for command line)
-    model_paths_str = ' '.join(model_paths)
-
-    !python comments/src/predict.py \
-      --data_dir "$DATA_DIR" \
-      --test_filename test_file.csv \
-      --model_paths {model_paths_str} \
-      --transformer_add_meta --transformer_add_flags \
-      --output_csv /content/drive/MyDrive/forsa_outputs/comments/submissions/final_ensemble.csv
-
-    print("\n✅ Submission file created!")
+print("\n✅ Submission file created!")
 ```
 
 ### Code Block 10b: Alternative - Manual Path Specification (If Code Block 10 fails)

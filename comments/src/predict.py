@@ -35,6 +35,63 @@ import schema
 from config import CommentsConfig, cfg_from_dict, guess_local_data_dir, guess_team_dir, resolve_comments_data_dir
 
 
+def _has_saved_weights(model_dir: Path) -> bool:
+    return any(
+        (model_dir / name).exists() for name in ("model.safetensors", "pytorch_model.bin", "pytorch_model.safetensors")
+    )
+
+
+def _extract_fold_number(dir_name: str) -> int | None:
+    """
+    Try to extract fold number from directory name like: <anything>_fold3
+    """
+    import re
+
+    m = re.search(r"_fold(\d+)\b", dir_name)
+    return int(m.group(1)) if m else None
+
+
+def _expand_run_dir(run_dir: Path) -> list[Path]:
+    """
+    Given a transformer *run* directory, auto-discover trained fold directories.
+    Only returns folds that contain both config.json and model weights.
+    """
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise FileNotFoundError(f"Run dir not found: {run_dir}")
+
+    fold_dirs = []
+    for d in run_dir.iterdir():
+        if not d.is_dir():
+            continue
+        if _extract_fold_number(d.name) is None:
+            continue
+        if (d / "config.json").exists() and _has_saved_weights(d):
+            fold_dirs.append(d)
+
+    fold_dirs.sort(key=lambda p: (_extract_fold_number(p.name) or 10_000, p.name))
+    if not fold_dirs:
+        raise FileNotFoundError(f"No complete fold checkpoints found inside run dir: {run_dir}")
+    return fold_dirs
+
+
+def _try_load_run_fold_weights(run_dir: Path) -> dict[int, float] | None:
+    """
+    If run_summary.json exists, return {fold_number: fold_macro_f1}.
+    """
+    summary_path = run_dir / "run_summary.json"
+    if not summary_path.exists():
+        return None
+    try:
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        scores = data.get("fold_scores") or []
+        out: dict[int, float] = {}
+        for i, s in enumerate(scores, start=1):
+            out[int(i)] = float(s)
+        return out or None
+    except Exception:
+        return None
+
+
 def _format_transformer_text(
     df: pd.DataFrame,
     cfg: CommentsConfig,
@@ -296,8 +353,20 @@ def main() -> None:
     parser.add_argument("--team_dir", type=str, default=None)
     parser.add_argument("--data_dir", type=str, default=None)
     parser.add_argument("--test_filename", type=str, default="test_file.csv")
-    parser.add_argument("--model_paths", type=str, nargs="+", required=True, help="One or more model paths.")
+    parser.add_argument("--model_paths", type=str, nargs="*", default=None, help="One or more model paths.")
+    parser.add_argument(
+        "--run_dirs",
+        type=str,
+        nargs="*",
+        default=None,
+        help="One or more transformer run dirs (auto-expanded to fold dirs).",
+    )
     parser.add_argument("--weights", type=float, nargs="*", default=None, help="Optional ensemble weights.")
+    parser.add_argument(
+        "--auto_weights",
+        action="store_true",
+        help="If using --run_dirs, weight each fold by its macro_f1 from run_summary.json when available.",
+    )
     parser.add_argument("--output_csv", type=str, default="submission.csv")
     parser.add_argument("--target_col_name", type=str, default="Class", help="Submission target column name.")
     parser.add_argument("--save_proba_npy", type=str, default=None)
@@ -309,8 +378,19 @@ def main() -> None:
     parser.add_argument("--transformer_add_flags", action="store_true")
     args = parser.parse_args()
 
+    if (not args.model_paths or len(args.model_paths) == 0) and (not args.run_dirs or len(args.run_dirs) == 0):
+        raise ValueError("You must provide --model_paths and/or --run_dirs.")
+    if args.auto_weights and args.model_paths and len(args.model_paths) > 0:
+        raise ValueError("--auto_weights is only supported when using --run_dirs (not mixed with --model_paths).")
+
     # Use the preprocess config saved next to the first model when available (reproducibility).
-    model_paths = [Path(p) for p in args.model_paths]
+    model_paths: list[Path] = []
+    if args.run_dirs:
+        for rd in args.run_dirs:
+            model_paths.extend(_expand_run_dir(Path(rd)))
+    if args.model_paths:
+        model_paths.extend([Path(p) for p in args.model_paths])
+
     cfg_path = _find_preprocess_config_for_model(model_paths[0])
     if cfg_path is not None:
         cfg = cfg_from_dict(json.loads(cfg_path.read_text(encoding="utf-8")))
@@ -331,12 +411,26 @@ def main() -> None:
     df_test_raw = schema.read_csv_robust(test_path)
     df_test_clean = preprocess.preprocess_comments_df(df_test_raw, cfg, is_train=False)
 
-    if args.weights is None or len(args.weights) == 0:
-        weights = [1.0] * len(model_paths)
-    else:
+    if args.weights is not None and len(args.weights) > 0:
         if len(args.weights) != len(model_paths):
-            raise ValueError("If provided, --weights must have the same length as --model_paths.")
+            raise ValueError("If provided, --weights must have the same length as the expanded model list.")
         weights = list(args.weights)
+    else:
+        weights = [1.0] * len(model_paths)
+        if args.auto_weights and args.run_dirs:
+            # Build weights from run_summary fold_scores when possible.
+            auto_w: list[float] = []
+            for rd in args.run_dirs:
+                run_dir = Path(rd)
+                fold_dirs = _expand_run_dir(run_dir)
+                fold_w = _try_load_run_fold_weights(run_dir) or {}
+                for fd in fold_dirs:
+                    fold_num = _extract_fold_number(fd.name) or 0
+                    auto_w.append(float(fold_w.get(int(fold_num), 1.0)))
+            # Only apply if it matches (safety)
+            if len(auto_w) == len(model_paths) and any(w != 1.0 for w in auto_w):
+                weights = auto_w
+                print("Using auto weights from run_summary.json (per fold).")
 
     # Determine global label ordering from first model mapping
     _, id2label0 = _load_label_mapping_for_model(model_paths[0])
