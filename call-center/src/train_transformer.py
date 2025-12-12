@@ -42,6 +42,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, classification_report
 
 import inspect
+import warnings
 import torch
 from torch.utils.data import Dataset
 from transformers import (
@@ -51,6 +52,14 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
+
+# Suppress harmless CUDA/TensorFlow registration warnings (they don't affect training)
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*tokenizer.*")
+warnings.filterwarnings("ignore", message=".*cuFFT.*")
+warnings.filterwarnings("ignore", message=".*cuDNN.*")
+warnings.filterwarnings("ignore", message=".*cuBLAS.*")
+warnings.filterwarnings("ignore", message=".*computation placer.*")
 
 from config import default_config, guess_repo_root, guess_team_dir, resolve_callcenter_output_dir
 
@@ -306,15 +315,23 @@ def main() -> None:
     ta_kwargs = {k: v for k, v in ta_kwargs.items() if k in ta_params}
     train_args = TrainingArguments(**ta_kwargs)
 
-    trainer = WeightedTrainer(
-        model=model,
-        args=train_args,
-        train_dataset=ds_tr,
-        eval_dataset=ds_va,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics,
-        class_weights=w_t,
-    )
+    # Use processing_class instead of tokenizer for Transformers 5.0+ compatibility
+    # (tokenizer still works but is deprecated)
+    trainer_kwargs: dict[str, Any] = {
+        "model": model,
+        "args": train_args,
+        "train_dataset": ds_tr,
+        "eval_dataset": ds_va,
+        "compute_metrics": compute_metrics,
+        "class_weights": w_t,
+    }
+    # Check if Trainer accepts processing_class (new API) or tokenizer (old API)
+    trainer_init_sig = inspect.signature(WeightedTrainer.__init__)
+    if "processing_class" in trainer_init_sig.parameters:
+        trainer_kwargs["processing_class"] = tokenizer
+    else:
+        trainer_kwargs["tokenizer"] = tokenizer
+    trainer = WeightedTrainer(**trainer_kwargs)
 
     trainer.train()
 
