@@ -105,6 +105,19 @@ def _parse_path_list(s: str | None) -> list[Path]:
     return dedup
 
 
+def _parse_float_list(s: str | None) -> list[float]:
+    if not s:
+        return []
+    parts = [p.strip() for p in str(s).split(",") if p.strip()]
+    out: list[float] = []
+    for p in parts:
+        try:
+            out.append(float(p))
+        except Exception:
+            raise ValueError(f"Invalid float in list: '{p}'")
+    return out
+
+
 def _get_model_classes(model: Any) -> list[int] | None:
     clf = getattr(model, "named_steps", {}).get("clf") if hasattr(model, "named_steps") else None
     classes = getattr(clf, "classes_", None) if clf is not None else None
@@ -240,6 +253,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Comma-separated list of artifacts dirs to ensemble (average decision scores). Overrides --artifacts_dir.",
     )
+    p.add_argument(
+        "--ensemble_weights",
+        type=str,
+        default=None,
+        help=(
+            "Optional comma-separated weights matching --ensemble_artifacts_dirs. "
+            "Weights are applied per artifacts dir (distributed equally across its fold models). "
+            "Example: '1,1,0.5'."
+        ),
+    )
 
     p.add_argument("--sample_submission_path", type=str, default=None, help="Override sample_submission.csv path.")
     p.add_argument("--run_id", type=str, default=None, help="Run id for submission filename.")
@@ -313,10 +336,15 @@ def main() -> None:
 
     # Artifacts dirs
     ensemble_dirs = _parse_path_list(args.ensemble_artifacts_dirs)
+    ensemble_weights = _parse_float_list(args.ensemble_weights)
     if ensemble_dirs:
         for d in ensemble_dirs:
             if not d.exists():
                 raise FileNotFoundError(f"Ensemble artifacts dir does not exist: {d}")
+        if ensemble_weights and len(ensemble_weights) != len(ensemble_dirs):
+            raise ValueError(
+                f"--ensemble_weights length ({len(ensemble_weights)}) must match --ensemble_artifacts_dirs length ({len(ensemble_dirs)})."
+            )
         spec_source_dir = ensemble_dirs[0]
     else:
         if args.artifacts_dir:
@@ -345,15 +373,21 @@ def main() -> None:
 
     # Load models
     models: list[Any] = []
+    model_weights: list[float] = []
     if ensemble_dirs:
-        for d in ensemble_dirs:
-            models.extend(
-                _load_models_from_artifacts_dir(
-                    artifacts_dir=d,
-                    use_fold_ensemble=bool(args.use_fold_ensemble),
-                    fold_models_dirname=str(args.fold_models_dirname),
-                )
+        for idx, d in enumerate(ensemble_dirs):
+            w_dir = float(ensemble_weights[idx]) if ensemble_weights else 1.0
+            ms = _load_models_from_artifacts_dir(
+                artifacts_dir=d,
+                use_fold_ensemble=bool(args.use_fold_ensemble),
+                fold_models_dirname=str(args.fold_models_dirname),
             )
+            if not ms:
+                raise RuntimeError(f"No models loaded from: {d}")
+            # Distribute dir weight across its models so each run contributes w_dir total.
+            w_each = w_dir / float(len(ms))
+            models.extend(ms)
+            model_weights.extend([w_each] * len(ms))
         print(f"[predict_linear_svc] Using artifacts ensemble: n_models={len(models)}")
     else:
         if args.model_path and not args.use_fold_ensemble:
@@ -366,12 +400,14 @@ def main() -> None:
             if not mp.exists():
                 raise FileNotFoundError(f"Model file not found: {mp}")
             models = [joblib.load(mp)]
+            model_weights = [1.0]
         else:
             models = _load_models_from_artifacts_dir(
                 artifacts_dir=spec_source_dir,
                 use_fold_ensemble=bool(args.use_fold_ensemble),
                 fold_models_dirname=str(args.fold_models_dirname),
             )
+            model_weights = [1.0] * len(models)
 
         if args.use_fold_ensemble:
             print(f"[predict_linear_svc] Using fold ensemble: n_models={len(models)}")
@@ -388,20 +424,24 @@ def main() -> None:
     # Sum decision scores across all models
     scores_sum: np.ndarray | None = None
     classes_ref: list[int] | None = None
-    for m in models:
+    total_w = float(np.sum(model_weights)) if model_weights else 0.0
+    if total_w <= 0:
+        raise RuntimeError("Invalid ensemble weights: sum(weights) must be > 0.")
+
+    for m, w in zip(models, model_weights, strict=True):
         classes = _get_model_classes(m)
         s = _decision_scores(m, X)
         if scores_sum is None:
-            scores_sum = s
+            scores_sum = float(w) * s
             classes_ref = classes
         else:
             if classes_ref is None:
                 if classes is not None:
                     raise ValueError("Cannot align model classes: reference classes unknown but a model provides classes_.")
-                scores_sum += s
+                scores_sum += float(w) * s
             else:
                 s2 = _align_scores_to_ref(s, classes=classes, classes_ref=classes_ref)
-                scores_sum += s2
+                scores_sum += float(w) * s2
     if scores_sum is None:
         raise RuntimeError("Ensemble produced no scores.")
     if classes_ref is None:
